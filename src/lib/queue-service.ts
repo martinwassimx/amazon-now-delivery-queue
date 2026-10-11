@@ -169,6 +169,33 @@ export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: Que
           .limit(1)
           .maybeSingle();
 
+        let activeSessionId = session.id;
+        if (!activeSessionId || activeSessionId.startsWith("local-")) {
+          const { data: dbSession } = await adminClient
+            .from("queue_sessions")
+            .select("id")
+            .eq("site_id", siteId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (dbSession) {
+            activeSessionId = dbSession.id;
+          } else {
+            const { data: createdSession } = await adminClient
+              .from("queue_sessions")
+              .insert({
+                site_id: siteId,
+                session_date: new Date().toISOString().slice(0, 10),
+                sequence_counter: 0,
+                is_active: true,
+              })
+              .select("id")
+              .single();
+            if (createdSession) activeSessionId = createdSession.id;
+          }
+        }
+
         const queueNumber = (maxRow?.queue_number || 0) + 1;
         const now = new Date().toISOString();
         const ticketToken = crypto.randomBytes(24).toString("hex");
@@ -177,7 +204,7 @@ export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: Que
           .from("queue_entries")
           .insert({
             site_id: siteId,
-            session_id: session.id && !session.id.startsWith("local-") ? session.id : undefined,
+            session_id: activeSessionId,
             queue_number: queueNumber,
             ticket_token: ticketToken,
             idempotency_key: idempotencyKey,
