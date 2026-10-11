@@ -30,14 +30,15 @@ CREATE TABLE IF NOT EXISTS sites (
 );
 
 -- 2. Daily Queue Sessions (جلسات الطابور اليومية والعداد التسلسلي)
+-- NOTE: Multiple sessions per day are intentionally allowed (staff can "Start New Session" to reset
+-- the counter mid-day). Only ONE session should have is_active=TRUE per site at any time.
 CREATE TABLE IF NOT EXISTS queue_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     session_date DATE NOT NULL DEFAULT CURRENT_DATE,
     sequence_counter INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT unique_site_session_date UNIQUE (site_id, session_date)
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 3. Queue Entries (تذاكر وأدوار الطابور)
@@ -156,26 +157,20 @@ BEGIN
         RETURN;
     END IF;
 
-    -- 2. Find or create session for the site, WITH ROW LOCK
+    -- 2. Find the currently ACTIVE session for the site, WITH ROW LOCK
     SELECT id INTO v_session_id
     FROM queue_sessions
     WHERE site_id = p_site_id
+      AND is_active = TRUE
     ORDER BY created_at DESC
     LIMIT 1
     FOR UPDATE;
 
     IF v_session_id IS NULL THEN
-        BEGIN
-            INSERT INTO queue_sessions (site_id, session_date, sequence_counter, is_active)
-            VALUES (p_site_id, CURRENT_DATE, 0, TRUE)
-            RETURNING id INTO v_session_id;
-        EXCEPTION WHEN unique_violation THEN
-            SELECT id INTO v_session_id
-            FROM queue_sessions
-            WHERE site_id = p_site_id
-            ORDER BY created_at DESC
-            LIMIT 1;
-        END;
+        -- No active session: create one automatically
+        INSERT INTO queue_sessions (site_id, session_date, sequence_counter, is_active)
+        VALUES (p_site_id, CURRENT_DATE, 0, TRUE)
+        RETURNING id INTO v_session_id;
     END IF;
 
     -- 3. Atomically increment sequence counter
@@ -414,13 +409,15 @@ ON CONFLICT (id) DO UPDATE SET
     address = EXCLUDED.address,
     is_active = TRUE;
 
+-- Insert initial session only if no active session exists for this site
 INSERT INTO queue_sessions (site_id, session_date, sequence_counter, is_active)
-VALUES (
+SELECT
     '00000000-0000-0000-0000-000000000001'::UUID,
     CURRENT_DATE,
     0,
     TRUE
-)
-ON CONFLICT (site_id, session_date) DO UPDATE SET
-    sequence_counter = 0,
-    is_active = TRUE;
+WHERE NOT EXISTS (
+    SELECT 1 FROM queue_sessions
+    WHERE site_id = '00000000-0000-0000-0000-000000000001'::UUID
+      AND is_active = TRUE
+);

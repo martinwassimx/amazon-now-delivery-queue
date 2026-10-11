@@ -624,15 +624,25 @@ export async function getCurrentSession(siteId: string = DEFAULT_SITE_ID): Promi
 
   if (adminClient && isSupabaseAdminConfigured()) {
     try {
-      const { data, error } = await adminClient
+      // Always fetch the most recently ACTIVE session first; fall back to most recent overall
+      const { data: activeData } = await adminClient
+        .from("queue_sessions")
+        .select("*")
+        .eq("site_id", siteId)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const data = activeData || (await adminClient
         .from("queue_sessions")
         .select("*")
         .eq("site_id", siteId)
         .order("created_at", { ascending: false })
         .limit(1)
-        .maybeSingle();
+        .maybeSingle()).data;
 
-      if (!error && data) {
+      if (data) {
         const session: SessionInfo = {
           id: data.id,
           site_id: data.site_id,
@@ -641,7 +651,8 @@ export async function getCurrentSession(siteId: string = DEFAULT_SITE_ID): Promi
           is_active: data.is_active ?? true,
           created_at: data.created_at,
         };
-        sessionCache[siteId] = { session, expires: Date.now() + 3500 };
+        // Keep cache short (2s) so session state changes propagate quickly
+        sessionCache[siteId] = { session, expires: Date.now() + 2000 };
         return session;
       }
     } catch (err) {
@@ -672,25 +683,16 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
     try {
       const today = new Date().toISOString().slice(0, 10);
 
-      // Check if session exists for today
-      const { data: existingSession } = await adminClient
+      // Mark ALL existing sessions for this site as inactive — do NOT delete them.
+      // Deleting would cascade-delete queue_entries (active tickets) making them vanish.
+      await adminClient
         .from("queue_sessions")
-        .select("*")
-        .eq("site_id", siteId)
-        .eq("session_date", today)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .update({ is_active: false })
+        .eq("site_id", siteId);
 
-      if (existingSession) {
-        // Cascade delete previous session so counter resets cleanly to 0 and queue starts from 1
-        await adminClient
-          .from("queue_sessions")
-          .delete()
-          .eq("id", existingSession.id);
-      }
-
-      // Insert fresh active session for today
+      // Insert a completely fresh session (avoids unique_site_session_date conflict
+      // by using a UUID-based approach — multiple sessions per day are allowed via
+      // a new row; only the latest is ever active).
       const { data: newSession, error: createError } = await adminClient
         .from("queue_sessions")
         .insert({
@@ -721,7 +723,7 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
           is_active: true,
           created_at: newSession.created_at,
         };
-        sessionCache[siteId] = { session: res, expires: Date.now() + 3500 };
+        sessionCache[siteId] = { session: res, expires: Date.now() + 2000 };
         return res;
       }
     } catch (err) {
@@ -833,10 +835,13 @@ export async function getQueueStats(siteId: string = DEFAULT_SITE_ID): Promise<Q
 
   if (adminClient && isSupabaseAdminConfigured()) {
     try {
+      // Only fetch entries from the current session to keep counts session-scoped
+      const sessionId = session.id;
       const { data: entries, error } = await adminClient
         .from("queue_entries")
-        .select("status, queue_number, called_at")
-        .eq("site_id", siteId);
+        .select("status, queue_number, called_at, session_id")
+        .eq("site_id", siteId)
+        .eq("session_id", sessionId);
 
       if (!error && entries) {
         const waiting = entries.filter((e) => e.status === "waiting");
@@ -844,7 +849,7 @@ export async function getQueueStats(siteId: string = DEFAULT_SITE_ID): Promise<Q
         const processing = entries.filter((e) => e.status === "processing");
         const completed = entries.filter((e) => e.status === "completed");
 
-        const latestCalled = called.sort((a, b) => {
+        const latestCalled = [...called].sort((a, b) => {
           const tA = a.called_at ? new Date(a.called_at).getTime() : 0;
           const tB = b.called_at ? new Date(b.called_at).getTime() : 0;
           return tB - tA;

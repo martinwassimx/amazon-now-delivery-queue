@@ -61,6 +61,13 @@ export default function StaffDashboardPage() {
   });
 
   const previousCountRef = useRef<number>(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced refresh: coalesces rapid calls (realtime + polling) into one
+  const scheduleRefresh = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { refreshData(); }, 300);
+  };
 
   // Fetch active queue and stats atomically
   const refreshData = async () => {
@@ -104,7 +111,7 @@ export default function StaffDashboardPage() {
             "postgres_changes",
             { event: "*", schema: "public", table: "queue_entries" },
             () => {
-              refreshData();
+              scheduleRefresh();
             }
           )
           .subscribe();
@@ -113,9 +120,10 @@ export default function StaffDashboardPage() {
       }
     }
 
-    const interval = setInterval(refreshData, 3000);
+    const interval = setInterval(scheduleRefresh, 5000);
     return () => {
       clearInterval(interval);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
       if (channel && supabase) {
         supabase.removeChannel(channel);
       }

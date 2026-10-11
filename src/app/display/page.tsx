@@ -25,6 +25,12 @@ export default function PublicDisplayPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const previousCalledRef = useRef<number | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleDisplayRefresh = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { fetchDisplayData(); }, 300);
+  };
 
   const fetchDisplayData = async () => {
     try {
@@ -69,7 +75,7 @@ export default function PublicDisplayPage() {
             "postgres_changes",
             { event: "*", schema: "public", table: "queue_entries" },
             () => {
-              fetchDisplayData();
+              scheduleDisplayRefresh();
             }
           )
           .subscribe();
@@ -78,9 +84,10 @@ export default function PublicDisplayPage() {
       }
     }
 
-    const interval = setInterval(fetchDisplayData, 3000);
+    const interval = setInterval(scheduleDisplayRefresh, 5000);
     return () => {
       clearInterval(interval);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
       if (channel && supabase) {
         supabase.removeChannel(channel);
       }
