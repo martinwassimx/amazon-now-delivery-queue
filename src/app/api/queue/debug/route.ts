@@ -4,14 +4,11 @@ import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const envServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const envAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
   const admin = getSupabaseAdminClient();
   let adminRes = null;
   let adminErr = null;
   let adminTime = 0;
+
   if (admin) {
     const s = Date.now();
     try {
@@ -25,11 +22,7 @@ export async function GET() {
   }
 
   return NextResponse.json({
-    envUrlRaw: envUrl,
-    envServiceKeyLength: envServiceKey?.length,
-    envServiceKeyStart: envServiceKey?.slice(0, 10),
-    envServiceKeyEnd: envServiceKey?.slice(-10),
-    envAnonKeyStart: envAnonKey?.slice(0, 10),
+    clientCreated: Boolean(admin),
     adminTime,
     adminRes,
     adminErr,
