@@ -16,8 +16,11 @@ import {
   Volume2, 
   VolumeX, 
   User, 
-  Check, 
-  Filter
+  Check,
+  Filter,
+  Lock,
+  Unlock,
+  Sparkles
 } from "lucide-react";
 import { StaffNav } from "@/components/StaffNav";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -178,6 +181,38 @@ export default function StaffDashboardPage() {
     });
   };
 
+  const handleSessionAction = async (action: "start_new" | "open" | "close") => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/queue/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, staff_name: "مشرف محطة الهرم" }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showNotification(data.error || "حصلت مشكلة أثناء تحديث الجلسة", "error");
+      } else {
+        showNotification(data.message || "تم تحديث الجلسة بنجاح", "success");
+        await refreshData();
+      }
+    } catch (err) {
+      showNotification("فشل الاتصال بالخادم", "error");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const triggerStartNewSession = () => {
+    if (
+      window.confirm(
+        "هل أنت متأكد من بدء جلسة عمل جديدة؟\n\n- سيتم تصفير عداد الأرقام ليبدأ الطابور من رقم 001.\n- سيتم فتح الطابور لاستقبال السائقين فوراً.\n- لن يؤثر ذلك على سجل الطلبات السابقة."
+      )
+    ) {
+      handleSessionAction("start_new");
+    }
+  };
+
   // Filter queue entries
   const filteredQueue = activeQueue.filter((entry) => {
     const matchesStatus =
@@ -220,6 +255,79 @@ export default function StaffDashboardPage() {
             </button>
           </div>
         )}
+
+        {/* 1. Session Control Bar (فتح / قفل الطابور + بدء جلسة جديدة) */}
+        <div className="bg-slate-900/90 border border-slate-800 p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black shrink-0 ${
+              (stats.is_session_active ?? true)
+                ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                : "bg-rose-500/15 text-rose-400 border border-rose-500/30"
+            }`}>
+              {(stats.is_session_active ?? true) ? (
+                <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+              ) : (
+                <Lock className="w-6 h-6 text-rose-400" />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-extrabold text-base text-white">حالة استقبال المناديب:</span>
+                <span className={`px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 ${
+                  (stats.is_session_active ?? true)
+                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                    : "bg-rose-500/10 text-rose-400 border border-rose-500/30"
+                }`}>
+                  <span className={`w-2 h-2 rounded-full ${
+                    (stats.is_session_active ?? true) ? "bg-emerald-400 animate-pulse" : "bg-rose-400"
+                  }`} />
+                  <span>{(stats.is_session_active ?? true) ? "الطابور مفتوح ويستقبل مناديب" : "الطابور مغلق (الاستقبال متوقف)"}</span>
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                {(stats.is_session_active ?? true)
+                  ? "السائقين يقدروا يمسحوا كود الـ QR ويدخلوا الطابور ويحجزوا أدوارهم حالياً."
+                  : "أي سائق هيمسح الـ QR هيظهرله إن الطابور مغلق ومش هيقدر يحجز دور حتى تفتح الجلسة."}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 w-full md:w-auto">
+            {/* Toggle Open / Close Queue */}
+            {(stats.is_session_active ?? true) ? (
+              <button
+                onClick={() => handleSessionAction("close")}
+                disabled={actionLoading}
+                className="flex-1 md:flex-none h-12 px-4 rounded-xl bg-slate-950 hover:bg-slate-850 border border-rose-500/50 hover:border-rose-400 text-rose-300 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer active:scale-95 shadow"
+                title="إغلاق الطابور لمنع دخول سائقين جدد"
+              >
+                <Lock className="w-4 h-4 text-rose-400" />
+                <span>إغلاق الطابور مؤقتاً</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => handleSessionAction("open")}
+                disabled={actionLoading}
+                className="flex-1 md:flex-none h-12 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition cursor-pointer active:scale-95"
+                title="فتح الطابور لبدء استقبال السائقين"
+              >
+                <Unlock className="w-4 h-4" />
+                <span>فتح استقبال المناديب</span>
+              </button>
+            )}
+
+            {/* Start New Session (Reset Counter) */}
+            <button
+              onClick={triggerStartNewSession}
+              disabled={actionLoading}
+              className="flex-1 md:flex-none h-12 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition cursor-pointer active:scale-95"
+              title="بدء جلسة عمل جديدة وتصفير عداد الأرقام ليبدأ من رقم 001"
+            >
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>بدء جلسة جديدة (تصفير العداد)</span>
+            </button>
+          </div>
+        </div>
 
         {/* Top Control Bar: Fast Call Next & Sound Toggle */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 p-4 sm:p-5 rounded-3xl shadow-xl">

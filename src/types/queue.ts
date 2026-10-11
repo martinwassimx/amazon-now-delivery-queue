@@ -69,6 +69,8 @@ export interface QueueStats {
   avg_wait_minutes: number;     // متوسط وقت الانتظار
   current_called_number?: number | null;
   latest_numbers_called?: number[];
+  is_session_active?: boolean;  // هل الطابور مفتوح ويستقبل سائقين حالياً؟
+  session_id?: string;          // كود الجلسة الحالية
 }
 
 export interface DriverJoinRequest {

@@ -9,10 +9,20 @@ const DEFAULT_SITE_ID = process.env.NEXT_PUBLIC_DEFAULT_SITE_ID || "00000000-000
 // In-Memory Dev Store (Persistent across hot-reloads via globalThis)
 // Used when Supabase credentials are not yet entered during local dev/preview
 // ==============================================================================
+export interface SessionInfo {
+  id: string;
+  site_id: string;
+  session_date: string;
+  sequence_counter: number;
+  is_active: boolean;
+  created_at: string;
+}
+
 interface MemoryStore {
   counter: number;
   entries: QueueEntry[];
   auditLogs: StaffAuditLog[];
+  currentSession: SessionInfo;
 }
 
 declare global {
@@ -26,6 +36,23 @@ function getMemoryStore(): MemoryStore {
       counter: 0,
       entries: [],
       auditLogs: [],
+      currentSession: {
+        id: "local-session-" + new Date().toISOString().slice(0, 10),
+        site_id: DEFAULT_SITE_ID,
+        session_date: new Date().toISOString().slice(0, 10),
+        sequence_counter: 0,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      },
+    };
+  } else if (!globalThis.__QUEUE_MEMORY_STORE__.currentSession) {
+    globalThis.__QUEUE_MEMORY_STORE__.currentSession = {
+      id: "local-session-" + new Date().toISOString().slice(0, 10),
+      site_id: DEFAULT_SITE_ID,
+      session_date: new Date().toISOString().slice(0, 10),
+      sequence_counter: 0,
+      is_active: true,
+      created_at: new Date().toISOString(),
     };
   }
   return globalThis.__QUEUE_MEMORY_STORE__;
@@ -69,6 +96,15 @@ function enrichEntryMetrics(entry: QueueEntry, allEntries: QueueEntry[]): QueueE
 export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: QueueEntry; isDuplicate: boolean }> {
   const siteId = params.site_id || DEFAULT_SITE_ID;
   const idempotencyKey = params.idempotency_key;
+
+  // 0. Verify queue session is currently active
+  const session = await getCurrentSession(siteId);
+  if (!session.is_active) {
+    const error = new Error("الطابور مغلق حالياً من قِبل إدارة محطة الهرم، لا يمكن حجز دور حتى يتم فتح جلسة جديدة من قِبل المشرفين");
+    (error as unknown as { session_closed: boolean }).session_closed = true;
+    throw error;
+  }
+
   const adminClient = getSupabaseAdminClient();
 
   if (adminClient && isSupabaseAdminConfigured()) {
@@ -399,8 +435,191 @@ export async function updateEntryStatus(
   return enrichEntryMetrics(entry, store.entries);
 }
 
+export async function getCurrentSession(siteId: string = DEFAULT_SITE_ID): Promise<SessionInfo> {
+  const adminClient = getSupabaseAdminClient();
+
+  if (adminClient && isSupabaseAdminConfigured()) {
+    try {
+      const { data, error } = await adminClient
+        .from("queue_sessions")
+        .select("*")
+        .eq("site_id", siteId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!error && data) {
+        return {
+          id: data.id,
+          site_id: data.site_id,
+          session_date: data.session_date,
+          sequence_counter: data.sequence_counter || 0,
+          is_active: data.is_active ?? true,
+          created_at: data.created_at,
+        };
+      }
+    } catch (err) {
+      console.warn("Supabase getCurrentSession error, falling back to local:", err);
+    }
+  }
+
+  const store = getMemoryStore();
+  if (!store.currentSession) {
+    store.currentSession = {
+      id: "local-session-" + new Date().toISOString().slice(0, 10),
+      site_id: siteId,
+      session_date: new Date().toISOString().slice(0, 10),
+      sequence_counter: store.counter || 0,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+  }
+  return store.currentSession;
+}
+
+export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffName: string = "فريق العمل"): Promise<SessionInfo> {
+  const adminClient = getSupabaseAdminClient();
+  const now = new Date().toISOString();
+
+  if (adminClient && isSupabaseAdminConfigured()) {
+    try {
+      // 1. Deactivate old sessions
+      await adminClient
+        .from("queue_sessions")
+        .update({ is_active: false })
+        .eq("site_id", siteId);
+
+      // 2. Insert fresh active session
+      const { data: newSession, error: createError } = await adminClient
+        .from("queue_sessions")
+        .insert({
+          site_id: siteId,
+          session_date: new Date().toISOString().slice(0, 10),
+          sequence_counter: 0,
+          is_active: true,
+        })
+        .select()
+        .single();
+
+      if (!createError && newSession) {
+        // Log audit
+        await adminClient.from("audit_logs").insert({
+          site_id: siteId,
+          action: "manual_override",
+          action_label_ar: "بدء جلسة جديدة",
+          performed_by_name: staffName,
+          details: "تم بدء جلسة عمل جديدة وتصفير عداد الطابور بنجاح",
+        });
+
+        return {
+          id: newSession.id,
+          site_id: newSession.site_id,
+          session_date: newSession.session_date,
+          sequence_counter: 0,
+          is_active: true,
+          created_at: newSession.created_at,
+        };
+      }
+    } catch (err) {
+      console.error("Supabase startNewSession error:", err);
+    }
+  }
+
+  // Memory fallback
+  const store = getMemoryStore();
+  store.counter = 0;
+  store.currentSession = {
+    id: "session-" + Date.now(),
+    site_id: siteId,
+    session_date: new Date().toISOString().slice(0, 10),
+    sequence_counter: 0,
+    is_active: true,
+    created_at: now,
+  };
+
+  store.auditLogs.unshift({
+    id: uuidv4(),
+    site_id: siteId,
+    action: "manual_override",
+    action_label_ar: "بدء جلسة جديدة",
+    performed_by_name: staffName,
+    details: "تم بدء جلسة عمل جديدة وتصفير عداد الطابور بنجاح",
+    created_at: now,
+  });
+
+  return store.currentSession;
+}
+
+export async function setSessionActive(
+  siteId: string = DEFAULT_SITE_ID,
+  isActive: boolean,
+  staffName: string = "فريق العمل"
+): Promise<SessionInfo> {
+  const adminClient = getSupabaseAdminClient();
+  const now = new Date().toISOString();
+
+  if (adminClient && isSupabaseAdminConfigured()) {
+    try {
+      const { data: latest } = await adminClient
+        .from("queue_sessions")
+        .select("id")
+        .eq("site_id", siteId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latest) {
+        const { data, error } = await adminClient
+          .from("queue_sessions")
+          .update({ is_active: isActive })
+          .eq("id", latest.id)
+          .select()
+          .single();
+
+        if (!error && data) {
+          await adminClient.from("audit_logs").insert({
+            site_id: siteId,
+            action: "manual_override",
+            action_label_ar: isActive ? "فتح الطابور" : "إغلاق الطابور",
+            performed_by_name: staffName,
+            details: isActive ? "تم فتح الطابور واستقبال المناديب" : "تم إغلاق الطابور ووقف حجز أدوار جديدة",
+          });
+
+          return {
+            id: data.id,
+            site_id: data.site_id,
+            session_date: data.session_date,
+            sequence_counter: data.sequence_counter || 0,
+            is_active: isActive,
+            created_at: data.created_at,
+          };
+        }
+      }
+    } catch (err) {
+      console.error("Supabase setSessionActive error:", err);
+    }
+  }
+
+  // Memory fallback
+  const store = getMemoryStore();
+  store.currentSession.is_active = isActive;
+
+  store.auditLogs.unshift({
+    id: uuidv4(),
+    site_id: siteId,
+    action: "manual_override",
+    action_label_ar: isActive ? "فتح الطابور" : "إغلاق الطابور",
+    performed_by_name: staffName,
+    details: isActive ? "تم فتح الطابور واستقبال المناديب" : "تم إغلاق الطابور ووقف حجز أدوار جديدة",
+    created_at: now,
+  });
+
+  return store.currentSession;
+}
+
 export async function getQueueStats(siteId: string = DEFAULT_SITE_ID): Promise<QueueStats> {
   const store = getMemoryStore();
+  const session = await getCurrentSession(siteId);
   const siteEntries = store.entries.filter((e) => e.site_id === siteId);
 
   const waiting = siteEntries.filter((e) => e.status === "waiting");
@@ -422,6 +641,8 @@ export async function getQueueStats(siteId: string = DEFAULT_SITE_ID): Promise<Q
     avg_wait_minutes: 4, // average wait time in Cairo distribution hubs
     current_called_number: latestCalled.length > 0 ? latestCalled[0].queue_number : null,
     latest_numbers_called: latestCalled.slice(0, 5).map((e) => e.queue_number),
+    is_session_active: session.is_active,
+    session_id: session.id,
   };
 }
 

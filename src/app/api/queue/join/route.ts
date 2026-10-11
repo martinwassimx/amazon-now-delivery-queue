@@ -58,6 +58,18 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("API /api/queue/join error:", error);
+    const errMessage = (error as Error)?.message || "";
+    if ((error as unknown as { session_closed?: boolean })?.session_closed || errMessage.includes("مغلق")) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: errMessage || "الطابور مغلق حالياً من قِبل إدارة المحطة",
+          session_closed: true,
+        },
+        { status: 403 }
+      );
+    }
+
     return NextResponse.json(
       { success: false, error: "حصلت مشكلة في حجز الدور، حاول تاني" },
       { status: 500 }

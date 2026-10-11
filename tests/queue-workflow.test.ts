@@ -139,10 +139,44 @@ async function runTests() {
   // Test 14: Queue statistics
   console.log("\n▶ Test 14: Real-time Queue stats");
   const stats = await getQueueStats(siteId);
-  console.log(`  ✓ Stats: Waiting: ${stats.waiting_count}, Called: ${stats.called_count}, Processing: ${stats.processing_count}, Completed today: ${stats.completed_today_count}`);
+  console.log(`  ✓ Stats: Waiting: ${stats.waiting_count}, Called: ${stats.called_count}, Processing: ${stats.processing_count}, Completed today: ${stats.completed_today_count}, Session Active: ${stats.is_session_active}`);
+  assert.strictEqual(stats.is_session_active, true, "Session should be initially active");
+
+  // Test 15: Staff closes session -> Driver cannot join
+  console.log("\n▶ Test 15: Staff closes session (الطابور مغلق)");
+  const { setSessionActive, startNewSession } = await import("../src/lib/queue-service");
+  await setSessionActive(siteId, false, "مشرف المحطة");
+  
+  let joinBlocked = false;
+  try {
+    await joinQueue({
+      site_id: siteId,
+      idempotency_key: "idemp-blocked-driver",
+      driver_name: "سائق بعد الإغلاق",
+    });
+  } catch (err: any) {
+    if (err.message.includes("مغلق")) {
+      joinBlocked = true;
+    }
+  }
+  assert.strictEqual(joinBlocked, true, "Driver join must be blocked when session is closed");
+  console.log("  ✓ Driver join blocked successfully when session is closed");
+
+  // Test 16: Staff starts new session -> Queue opens and counter resets
+  console.log("\n▶ Test 16: Staff starts new session (بدء جلسة جديدة وتصفير العداد)");
+  const newSession = await startNewSession(siteId, "مشرف المحطة");
+  assert.strictEqual(newSession.is_active, true, "New session must be active");
+  
+  const freshDriver = await joinQueue({
+    site_id: siteId,
+    idempotency_key: "idemp-fresh-driver-1",
+    driver_name: "سائق الجلسة الجديدة",
+  });
+  assert.strictEqual(freshDriver.entry.queue_number, 1, "Queue number must reset to 1 in new session");
+  console.log(`  ✓ Fresh session active, allocated Queue #${freshDriver.entry.queue_number}`);
 
   console.log("\n==========================================================");
-  console.log("🎉 ALL TESTS PASSED SUCCESSFULLY! (تم اجتياز جميع الاختبارات بنجاح)");
+  console.log("🎉 ALL TESTS PASSED SUCCESSFULLY! (تم اجتياز جميع الاختبارات الـ 16 بنجاح)");
   console.log("==========================================================\n");
 }
 

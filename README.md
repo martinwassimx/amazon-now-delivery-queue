@@ -5,9 +5,9 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=for-the-badge&logo=typescript)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38bdf8?style=for-the-badge&logo=tailwindcss)](https://tailwindcss.com/)
 [![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL_%26_Realtime-3ecf8e?style=for-the-badge&logo=supabase)](https://supabase.com/)
-[![Tests Passing](https://img.shields.io/badge/Tests-14%2F14_Passed-success?style=for-the-badge&logo=jest)](tests/queue-workflow.test.ts)
+[![Tests Passing](https://img.shields.io/badge/Tests-16%2F16_Passed-success?style=for-the-badge&logo=jest)](tests/queue-workflow.test.ts)
 
-A production-ready, mobile-first QR delivery queue management system built for **Amazon Now Distribution Hub — Al-Haram, Giza, Egypt** (**محطة توزيع أمازون ناو — الهرم**). Designed specifically for rapid fulfillment couriers and warehouse dispatchers, featuring **100% natural Egyptian Arabic (العامية المصرية)**, strict right-to-left (RTL) typography, atomic concurrency locking, a mandatory 5-minute driver rest cooldown, and authentic Amazon Now aesthetics.
+A production-ready, mobile-first QR delivery queue management system built for **Amazon Now Distribution Hub — Al-Haram, Giza, Egypt** (**محطة توزيع أمازون ناو — الهرم**). Designed specifically for rapid fulfillment couriers and warehouse dispatchers, featuring **100% natural Egyptian Arabic (العامية المصرية)**, strict right-to-left (RTL) typography, atomic concurrency locking, a mandatory 5-minute driver rest cooldown, shift session controls, and authentic Amazon Now aesthetics.
 
 ---
 
@@ -15,13 +15,13 @@ A production-ready, mobile-first QR delivery queue management system built for *
 
 | Interface | Route | Primary Audience | Description |
 | :--- | :--- | :--- | :--- |
-| **Driver Scan & Join** | `/` | Couriers / Drivers | Mobile-optimized one-tap queue entrance. Zero sign-up, mandatory courier name, no tracking number required. |
+| **Driver Scan & Join** | `/` | Couriers / Drivers | Mobile-optimized one-tap queue entrance. Zero sign-up, mandatory courier name, real-time closed session banner. |
 | **Private Live Ticket** | `/ticket/[token]` | Couriers / Drivers | Large dynamic queue number, people ahead, real-time status updates, audio chime & vibration alert. |
-| **Staff Operations Dashboard** | `/staff` | Warehouse Dispatchers | FIFO driver calling (`نده على اللي بعده`), preparation tracking, completion, and queue management. |
+| **Staff Operations Dashboard** | `/staff` | Warehouse Dispatchers | Shift session controls (Open/Close queue & Reset counter), FIFO driver calling (`نده على اللي بعده`), preparation tracking, and order completion. |
 | **Public TV Monitor Display** | `/display` | Waiting Bay Screen | Digital signage for warehouse waiting area with huge current-turn numbers and automated sound alert. |
 | **Printable QR Poster** | `/staff/qr` | Station Admins | Permanent location QR code manager with high-res PNG download and A4 printable poster generator. |
 | **Order History** | `/staff/history` | Dispatch Supervisors | Completed order records with local Cairo timestamps (`Africa/Cairo`) and instant search. |
-| **Audit Logs** | `/staff/audit` | Station Compliance | Comprehensive audit trail of every staff action (call, prep, finish, skip, cancel). |
+| **Audit Logs** | `/staff/audit` | Station Compliance | Comprehensive audit trail of every staff action (call, prep, finish, skip, cancel, session toggle). |
 | **Staff Authentication** | `/staff/login` | Station Staff | Supabase Auth login with 1-click demo access for local staging. |
 
 ---
@@ -34,24 +34,30 @@ A production-ready, mobile-first QR delivery queue management system built for *
 - **Mandatory Driver Name:** Couriers enter their name or badge code so dispatchers can call them at the counter. (Shipment / tracking number field removed per operational flow).
 - **One Giant High-Contrast Button:** Prominent **"ادخل الطابور"** button designed for one-handed thumb tapping on motorbike or van arrival.
 
-### 2. ⏱️ 5-Minute Mandatory Cooldown (Rest & Fairness Enforced)
+### 2. 🚦 Shift Session Management & Station Control (New)
+- **Open / Close Reception:** Warehouse dispatchers can toggle the queue open or closed (`فتح استقبال المناديب` / `إغلاق الطابور مؤقتاً`) at any time directly from the top of the `/staff` dashboard.
+- **Instant Driver Notice:** When closed, the driver screen automatically disables the join button and displays a high-visibility closed banner: `الطابور مغلق حالياً (استقبال المناديب متوقف)`.
+- **Start New Shift Session (`بدء جلسة جديدة - تصفير العداد`):** Dispatchers can reset the daily counter back to 0 with one click, beginning a fresh shift where the next driver receives ticket `#001` while preserving historical records.
+- **Server-Side Validation:** Requests to `/api/queue/join` during a closed session are rejected with HTTP `403 Forbidden` (`session_closed: true`).
+
+### 3. ⏱️ 5-Minute Mandatory Cooldown (Rest & Fairness Enforced)
 - Once a courier completes their order pickup, a **5-minute (300 seconds) mandatory cooldown** is enforced.
 - Prevents queue hoarding and promotes fair rotation among all drivers.
 - **Dual Enforcement:**
   - **Client-Side:** The join button is locked into a countdown timer displaying `برجاء الانتظار (MM:SS)` with clear Egyptian instructions.
   - **Server-Side:** `/api/queue/join` checks the driver's previous ticket and rejects requests before the 300-second mark with HTTP `429 Too Many Requests`.
 
-### 3. 🔒 Atomic Concurrency & Idempotency
+### 4. 🔒 Atomic Concurrency & Idempotency
 - **No Duplicate Numbers:** Queue number allocation uses PostgreSQL row-level locks (`FOR UPDATE`) inside a database function (`join_queue_atomic`).
 - **Network Retry & Double-Tap Protection:** Every join request carries an `idempotency_key` generated on the client. Rapid double-taps return the existing ticket safely without incrementing the queue.
 - **FIFO Staff Calling:** Dispatchers call drivers using `FOR UPDATE SKIP LOCKED` to prevent race conditions when multiple staff members call drivers simultaneously.
 
-### 4. 🔔 Dynamic Audio Chime, Vibration & Realtime Alerts
+### 5. 🔔 Dynamic Audio Chime, Vibration & Realtime Alerts
 - **Zero External Audio Assets:** Synthesizes a pleasant two-tone warehouse chime (880Hz -> 1320Hz) directly in the browser via the **Web Audio API**.
 - **Haptic Feedback:** Vibrates mobile devices via the **HTML5 Vibration API** when the driver's number is called.
 - **Celebratory Confetti:** Triggers celebration confetti on the driver's screen upon being summoned to the pickup window.
 
-### 5. 🎨 Authentic Amazon Now Branding
+### 6. 🎨 Authentic Amazon Now Branding
 - **Official Brand Mark:** High-resolution electric blue icon (`#0071dc`) with white lowercase "amazon", "now" with electric lightning bolt in the "o", and the iconic Amazon smile curve.
 - **Al-Haram Hub Badge:** Distinctive **محطة توزيع أمازون ناو — الهرم** identifier with a pulsing amber status indicator.
 - **Color Palette:**

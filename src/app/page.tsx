@@ -10,7 +10,8 @@ import {
   AlertCircle, 
   User, 
   Hourglass,
-  Clock
+  Clock,
+  Lock
 } from "lucide-react";
 import { LiveClock } from "@/components/LiveClock";
 import { AmazonNowLogo } from "@/components/AmazonNowLogo";
@@ -24,6 +25,7 @@ export default function DriverJoinPage() {
   const [driverName, setDriverName] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState<string>("");
   const [existingActiveTicket, setExistingActiveTicket] = useState<{ token: string; number: number } | null>(null);
+  const [isSessionActive, setIsSessionActive] = useState<boolean>(true);
   
   // 5-minute Cooldown State
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
@@ -91,6 +93,24 @@ export default function DriverJoinPage() {
     } catch {}
   }, []);
 
+  // Check Session Open/Closed status every 3.5s
+  useEffect(() => {
+    const checkSession = () => {
+      fetch("/api/queue/stats")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.stats && data.stats.is_session_active !== undefined) {
+            setIsSessionActive(data.stats.is_session_active);
+          }
+        })
+        .catch(() => {});
+    };
+
+    checkSession();
+    const interval = setInterval(checkSession, 3500);
+    return () => clearInterval(interval);
+  }, []);
+
   // Countdown timer effect
   useEffect(() => {
     if (cooldownRemaining <= 0) return;
@@ -120,6 +140,12 @@ export default function DriverJoinPage() {
   const handleJoinQueue = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (loading) return;
+
+    // 0. Enforce session active check
+    if (!isSessionActive) {
+      setErrorMessage("الطابور مغلق حالياً من قِبل إدارة محطة الهرم، لا يمكن حجز دور حتى يتم فتح جلسة جديدة من قِبل المشرفين.");
+      return;
+    }
 
     // 1. Enforce 5-minute cooldown check
     if (cooldownRemaining > 0) {
@@ -152,6 +178,9 @@ export default function DriverJoinPage() {
       const data = await res.json();
 
       if (!res.ok || !data.success) {
+        if (data.session_closed) {
+          setIsSessionActive(false);
+        }
         if (data.cooldown_remaining_seconds) {
           setCooldownRemaining(data.cooldown_remaining_seconds);
         }
@@ -205,6 +234,19 @@ export default function DriverJoinPage() {
           أهلاً بيك يا كابتن! اكتب اسمك واضغط على الزر عشان تاخد دورك فوراً.
         </p>
       </header>
+
+      {/* Session Closed Alert Banner */}
+      {!isSessionActive && (
+        <div className="my-3.5 p-4 rounded-2xl bg-rose-950/80 border border-rose-700 text-rose-200 shadow-xl space-y-2 animate-pulse">
+          <div className="flex items-center gap-2.5 font-bold text-sm text-rose-300">
+            <Lock className="w-5 h-5 text-rose-400 shrink-0" />
+            <span>الطابور مغلق حالياً (استقبال المناديب متوقف)</span>
+          </div>
+          <p className="text-xs text-rose-200/90 leading-relaxed">
+            محطة توزيع الهرم أغلقت استقبال الطلبات حالياً. برجاء الانتظار حتى يقوم الموظف بفتح جلسة عمل جديدة.
+          </p>
+        </div>
+      )}
 
       {/* 5-minute Cooldown Alert Banner */}
       {cooldownRemaining > 0 && (
@@ -287,16 +329,16 @@ export default function DriverJoinPage() {
         {/* The Big Join Button */}
         <div className="relative group pt-1">
           <div className={`absolute -inset-1 rounded-3xl blur-lg transition duration-300 ${
-            cooldownRemaining > 0 
+            cooldownRemaining > 0 || !isSessionActive
               ? "bg-slate-700 opacity-30" 
               : "bg-gradient-to-r from-amber-500 to-amber-600 opacity-70 group-hover:opacity-100"
           }`}></div>
           <button
             id="join-queue-button"
             type="submit"
-            disabled={loading || cooldownRemaining > 0}
+            disabled={loading || cooldownRemaining > 0 || !isSessionActive}
             className={`relative w-full h-18 sm:h-20 rounded-2xl font-black text-xl sm:text-2xl flex items-center justify-center gap-3 shadow-xl transition-all duration-200 select-none ${
-              cooldownRemaining > 0
+              cooldownRemaining > 0 || !isSessionActive
                 ? "bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700"
                 : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-[0.98] text-slate-950 cursor-pointer"
             }`}
@@ -305,6 +347,11 @@ export default function DriverJoinPage() {
               <div className="flex items-center gap-3">
                 <RefreshCw className="w-7 h-7 animate-spin text-slate-950" />
                 <span className="text-lg font-bold">جاري حجز دورك...</span>
+              </div>
+            ) : !isSessionActive ? (
+              <div className="flex items-center justify-center gap-2 text-base sm:text-lg">
+                <Lock className="w-5 h-5 text-rose-400 shrink-0" />
+                <span>الطابور مغلق حالياً (غير متاح)</span>
               </div>
             ) : cooldownRemaining > 0 ? (
               <div className="flex items-center justify-center gap-2 text-base sm:text-lg">
