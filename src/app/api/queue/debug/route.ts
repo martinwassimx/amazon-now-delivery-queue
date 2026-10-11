@@ -1,30 +1,31 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { joinQueue, callNextDriver } from "@/lib/queue-service";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const admin = getSupabaseAdminClient();
-  let adminRes = null;
-  let adminErr = null;
-  let adminTime = 0;
+  let joinResult = null;
+  let joinError: unknown = null;
 
-  if (admin) {
-    const s = Date.now();
-    try {
-      const { data, error } = await admin.from("queue_sessions").select("*").limit(1);
-      adminTime = Date.now() - s;
-      adminRes = data;
-      adminErr = error;
-    } catch (e) {
-      adminErr = (e as Error).message;
-    }
+  try {
+    const res = await joinQueue({
+      site_id: "00000000-0000-0000-0000-000000000001",
+      driver_name: "سائق تجريبي ديباج",
+      idempotency_key: "debug-join-" + Date.now(),
+    });
+    joinResult = res;
+  } catch (err: unknown) {
+    joinError = {
+      message: (err as Error)?.message,
+      stack: (err as Error)?.stack,
+      raw: String(err),
+      keys: Object.keys(err || {}),
+      errObj: err,
+    };
   }
 
   return NextResponse.json({
-    clientCreated: Boolean(admin),
-    adminTime,
-    adminRes,
-    adminErr,
+    joinResult,
+    joinError,
   });
 }
