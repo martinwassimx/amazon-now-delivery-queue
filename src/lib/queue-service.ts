@@ -109,7 +109,26 @@ export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: Que
 
   if (adminClient && isSupabaseAdminConfigured()) {
     try {
-      // 1. Call atomic database stored procedure
+      // 1. Check idempotency first: if already joined with this key, return existing ticket
+      const { data: existing } = await adminClient
+        .from("queue_entries")
+        .select("*")
+        .eq("idempotency_key", idempotencyKey)
+        .maybeSingle();
+
+      if (existing) {
+        const { data: waitingData } = await adminClient
+          .from("queue_entries")
+          .select("id, site_id, status, joined_at")
+          .eq("site_id", siteId)
+          .eq("status", "waiting");
+        return {
+          entry: enrichEntryMetrics(existing as QueueEntry, (waitingData || []) as QueueEntry[]),
+          isDuplicate: true,
+        };
+      }
+
+      // 2. Call atomic database stored procedure for fresh ticket
       const { data, error } = await adminClient.rpc("join_queue_atomic", {
         p_site_id: siteId,
         p_idempotency_key: idempotencyKey,
@@ -117,9 +136,7 @@ export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: Que
         p_order_reference: params.order_reference || null,
       });
 
-      if (error) {
-        console.error("Supabase join_queue_atomic error, falling back to local store:", error);
-      } else if (data && data.length > 0) {
+      if (!error && data && data.length > 0) {
         const row = data[0];
         const entry: QueueEntry = {
           id: row.entry_id,
@@ -139,9 +156,53 @@ export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: Que
           estimated_wait_minutes: Math.max(2, (row.drivers_ahead + 1) * 3),
         };
         return { entry, isDuplicate: false };
+      } else {
+        console.warn("Supabase join_queue_atomic failed, executing direct table insert:", error);
+
+        // 3. Direct table fallback if RPC is unavailable
+        // Get highest queue number
+        const { data: maxRow } = await adminClient
+          .from("queue_entries")
+          .select("queue_number")
+          .eq("site_id", siteId)
+          .order("queue_number", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const queueNumber = (maxRow?.queue_number || 0) + 1;
+        const now = new Date().toISOString();
+        const ticketToken = crypto.randomBytes(24).toString("hex");
+
+        const { data: inserted, error: insertError } = await adminClient
+          .from("queue_entries")
+          .insert({
+            site_id: siteId,
+            session_id: session.id && !session.id.startsWith("local-") ? session.id : undefined,
+            queue_number: queueNumber,
+            ticket_token: ticketToken,
+            idempotency_key: idempotencyKey,
+            driver_name: params.driver_name ? params.driver_name.trim() : null,
+            order_reference: params.order_reference ? params.order_reference.trim() : null,
+            status: "waiting",
+            joined_at: now,
+          })
+          .select()
+          .single();
+
+        if (!insertError && inserted) {
+          const { data: waitingData } = await adminClient
+            .from("queue_entries")
+            .select("id, site_id, status, joined_at")
+            .eq("site_id", siteId)
+            .eq("status", "waiting");
+          return {
+            entry: enrichEntryMetrics(inserted as QueueEntry, (waitingData || []) as QueueEntry[]),
+            isDuplicate: false,
+          };
+        }
       }
     } catch (err) {
-      console.error("Failed to execute RPC:", err);
+      console.error("Failed to execute RPC / direct insert:", err);
     }
   }
 
@@ -483,18 +544,30 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
 
   if (adminClient && isSupabaseAdminConfigured()) {
     try {
-      // 1. Deactivate old sessions
-      await adminClient
-        .from("queue_sessions")
-        .update({ is_active: false })
-        .eq("site_id", siteId);
+      const today = new Date().toISOString().slice(0, 10);
 
-      // 2. Insert fresh active session
+      // Check if session already exists for today
+      const { data: existingSession } = await adminClient
+        .from("queue_sessions")
+        .select("*")
+        .eq("site_id", siteId)
+        .eq("session_date", today)
+        .maybeSingle();
+
+      if (existingSession) {
+        // Delete previous session to cascade clean reset
+        await adminClient
+          .from("queue_sessions")
+          .delete()
+          .eq("id", existingSession.id);
+      }
+
+      // Insert fresh active session for today
       const { data: newSession, error: createError } = await adminClient
         .from("queue_sessions")
         .insert({
           site_id: siteId,
-          session_date: new Date().toISOString().slice(0, 10),
+          session_date: today,
           sequence_counter: 0,
           is_active: true,
         })
@@ -502,7 +575,6 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
         .single();
 
       if (!createError && newSession) {
-        // Log audit
         await adminClient.from("audit_logs").insert({
           site_id: siteId,
           action: "manual_override",
@@ -618,8 +690,46 @@ export async function setSessionActive(
 }
 
 export async function getQueueStats(siteId: string = DEFAULT_SITE_ID): Promise<QueueStats> {
-  const store = getMemoryStore();
+  const adminClient = getSupabaseAdminClient();
   const session = await getCurrentSession(siteId);
+
+  if (adminClient && isSupabaseAdminConfigured()) {
+    try {
+      const { data: entries, error } = await adminClient
+        .from("queue_entries")
+        .select("status, queue_number, called_at")
+        .eq("site_id", siteId);
+
+      if (!error && entries) {
+        const waiting = entries.filter((e) => e.status === "waiting");
+        const called = entries.filter((e) => e.status === "called");
+        const processing = entries.filter((e) => e.status === "processing");
+        const completed = entries.filter((e) => e.status === "completed");
+
+        const latestCalled = called.sort((a, b) => {
+          const tA = a.called_at ? new Date(a.called_at).getTime() : 0;
+          const tB = b.called_at ? new Date(b.called_at).getTime() : 0;
+          return tB - tA;
+        });
+
+        return {
+          waiting_count: waiting.length,
+          called_count: called.length,
+          processing_count: processing.length,
+          completed_today_count: completed.length,
+          avg_wait_minutes: 4,
+          current_called_number: latestCalled.length > 0 ? latestCalled[0].queue_number : null,
+          latest_numbers_called: latestCalled.slice(0, 5).map((e) => e.queue_number),
+          is_session_active: session.is_active,
+          session_id: session.id,
+        };
+      }
+    } catch (err) {
+      console.warn("Supabase getQueueStats error, falling back to local:", err);
+    }
+  }
+
+  const store = getMemoryStore();
   const siteEntries = store.entries.filter((e) => e.site_id === siteId);
 
   const waiting = siteEntries.filter((e) => e.status === "waiting");
@@ -647,6 +757,25 @@ export async function getQueueStats(siteId: string = DEFAULT_SITE_ID): Promise<Q
 }
 
 export async function getAuditLogs(siteId: string = DEFAULT_SITE_ID, limit: number = 30): Promise<StaffAuditLog[]> {
+  const adminClient = getSupabaseAdminClient();
+
+  if (adminClient && isSupabaseAdminConfigured()) {
+    try {
+      const { data, error } = await adminClient
+        .from("audit_logs")
+        .select("*")
+        .eq("site_id", siteId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (!error && data) {
+        return data as StaffAuditLog[];
+      }
+    } catch (err) {
+      console.warn("Supabase getAuditLogs error, falling back to local:", err);
+    }
+  }
+
   const store = getMemoryStore();
   return store.auditLogs
     .filter((l) => l.site_id === siteId)

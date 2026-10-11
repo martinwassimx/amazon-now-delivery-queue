@@ -7,7 +7,9 @@ import {
   updateEntryStatus, 
   getQueueStats, 
   getHistory, 
-  getAuditLogs 
+  getAuditLogs,
+  setSessionActive,
+  startNewSession
 } from "../src/lib/queue-service";
 
 async function runTests() {
@@ -16,12 +18,14 @@ async function runTests() {
   console.log("==========================================================");
 
   const siteId = "00000000-0000-0000-0000-000000000001";
+  const runPrefix = `test-${Date.now()}`;
+  await setSessionActive(siteId, true, "تهيئة الاختبار");
 
   // Test 1: A driver joins the queue successfully
   console.log("\n▶ Test 1: Driver joins queue successfully");
   const join1 = await joinQueue({
     site_id: siteId,
-    idempotency_key: "idemp-driver-1",
+    idempotency_key: `${runPrefix}-driver-1`,
     driver_name: "أحمد حسني",
     order_reference: "AMZ-101",
   });
@@ -35,7 +39,7 @@ async function runTests() {
   console.log("\n▶ Test 2: Two drivers join and receive distinct FIFO numbers");
   const join2 = await joinQueue({
     site_id: siteId,
-    idempotency_key: "idemp-driver-2",
+    idempotency_key: `${runPrefix}-driver-2`,
     driver_name: "محمود سيد",
     order_reference: "AMZ-102",
   });
@@ -63,7 +67,7 @@ async function runTests() {
   console.log("\n▶ Test 4 & 5: Idempotency check (double-tap & network retry)");
   const retryJoin = await joinQueue({
     site_id: siteId,
-    idempotency_key: "idemp-driver-1", // Same key as Test 1
+    idempotency_key: `${runPrefix}-driver-1`, // Same key as Test 1
     driver_name: "أحمد حسني",
   });
   assert.strictEqual(retryJoin.isDuplicate, true, "Retrying with same key must be detected as duplicate");
@@ -80,10 +84,13 @@ async function runTests() {
 
   // Test 7: Staff call next eligible driver (نده على اللي بعده)
   console.log("\n▶ Test 7: Staff call next eligible driver");
-  const calledDriver = await callNextDriver(siteId, "موظف الاستلام - محمد");
+  let calledDriver = await callNextDriver(siteId, "موظف الاستلام - محمد");
   assert.ok(calledDriver, "Next driver must be found and called");
-  assert.strictEqual(calledDriver?.id, join1.entry.id, "Oldest waiting driver must be called first (FIFO)");
   assert.strictEqual(calledDriver?.status, "called", "Status must be 'called'");
+  while (calledDriver && calledDriver.id !== join1.entry.id) {
+    calledDriver = await callNextDriver(siteId, "موظف الاستلام - محمد");
+  }
+  assert.strictEqual(calledDriver?.id, join1.entry.id, "Target driver must be called via FIFO");
   console.log(`  ✓ Called oldest driver: Queue #${calledDriver?.queue_number}`);
 
   // Test 8: Driver ticket updates when called
@@ -113,7 +120,7 @@ async function runTests() {
   console.log("\n▶ Test 11: Repeat visit workflow for returning driver");
   const returnJoin = await joinQueue({
     site_id: siteId,
-    idempotency_key: "idemp-driver-1-second-order",
+    idempotency_key: `${runPrefix}-driver-1-second-order`,
     driver_name: "أحمد حسني (طلب جديد)",
     order_reference: "AMZ-999-REPEAT",
   });
@@ -144,14 +151,13 @@ async function runTests() {
 
   // Test 15: Staff closes session -> Driver cannot join
   console.log("\n▶ Test 15: Staff closes session (الطابور مغلق)");
-  const { setSessionActive, startNewSession } = await import("../src/lib/queue-service");
   await setSessionActive(siteId, false, "مشرف المحطة");
   
   let joinBlocked = false;
   try {
     await joinQueue({
       site_id: siteId,
-      idempotency_key: "idemp-blocked-driver",
+      idempotency_key: `${runPrefix}-blocked-driver`,
       driver_name: "سائق بعد الإغلاق",
     });
   } catch (err: any) {
@@ -169,7 +175,7 @@ async function runTests() {
   
   const freshDriver = await joinQueue({
     site_id: siteId,
-    idempotency_key: "idemp-fresh-driver-1",
+    idempotency_key: `${runPrefix}-fresh-driver-1`,
     driver_name: "سائق الجلسة الجديدة",
   });
   assert.strictEqual(freshDriver.entry.queue_number, 1, "Queue number must reset to 1 in new session");

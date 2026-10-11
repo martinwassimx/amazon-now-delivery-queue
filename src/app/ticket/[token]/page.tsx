@@ -36,6 +36,7 @@ function TicketContent({
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [cooldownSec, setCooldownSec] = useState<number>(0);
   const previousStatusRef = useRef<string | null>(null);
+  const retryCountRef = useRef<number>(0);
 
   const formatCooldown = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -43,13 +44,23 @@ function TicketContent({
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  // Fetch ticket details from API
+  // Fetch ticket details from API with retry resiliency
   const fetchTicket = async () => {
     try {
       const res = await fetch(`/api/queue/ticket/${token}`);
       const data = await res.json();
 
       if (!res.ok || !data.success) {
+        // If ticket was already loaded once, ignore transient network hiccup
+        if (previousStatusRef.current) return;
+
+        // Allow up to 3 retries (1.2s each) before declaring not found
+        if (retryCountRef.current < 3) {
+          retryCountRef.current += 1;
+          setTimeout(fetchTicket, 1200);
+          return;
+        }
+
         setErrorMessage(data.error || "التذكرة غير موجودة");
         setLoading(false);
         return;
@@ -57,7 +68,9 @@ function TicketContent({
 
       const current = data.entry as QueueEntry;
       setTicket(current);
+      setErrorMessage(null);
       setLoading(false);
+      retryCountRef.current = 0;
 
       // If completed, initialize 5-minute cooldown (300 seconds)
       if (current.status === "completed") {
@@ -162,20 +175,34 @@ function TicketContent({
 
   if (errorMessage || !ticket) {
     return (
-      <main className="flex-1 flex flex-col items-center justify-center p-6 text-center max-w-sm mx-auto">
-        <div className="w-16 h-16 rounded-2xl bg-rose-950/80 border border-rose-800 flex items-center justify-center mb-4">
+      <main className="flex-1 flex flex-col items-center justify-center p-6 text-center max-w-sm mx-auto space-y-3">
+        <div className="w-16 h-16 rounded-2xl bg-rose-950/80 border border-rose-800 flex items-center justify-center mb-1">
           <AlertTriangle className="w-8 h-8 text-rose-400" />
         </div>
         <h2 className="text-xl font-bold text-white">التذكرة غير صالحة</h2>
-        <p className="text-sm text-slate-400 mt-2 leading-relaxed">
+        <p className="text-sm text-slate-400 leading-relaxed">
           {errorMessage || "مقدرناش نلاقي التذكرة دي. ممكن تكون انتهت أو الرابط غير صحيح."}
         </p>
-        <button
-          onClick={handleStartNewOrder}
-          className="mt-6 w-full h-13 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl transition"
-        >
-          ادخل الطابور من جديد
-        </button>
+        <div className="w-full space-y-2.5 pt-3">
+          <button
+            onClick={() => {
+              setLoading(true);
+              setErrorMessage(null);
+              retryCountRef.current = 0;
+              fetchTicket();
+            }}
+            className="w-full h-13 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+          >
+            <RotateCcw className="w-4 h-4" />
+            <span>إعادة المحاولة الآن</span>
+          </button>
+          <button
+            onClick={handleStartNewOrder}
+            className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold rounded-xl border border-slate-700 transition cursor-pointer"
+          >
+            ادخل الطابور من جديد
+          </button>
+        </div>
       </main>
     );
   }
