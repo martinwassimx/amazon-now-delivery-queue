@@ -200,6 +200,88 @@ The entire interface is written in natural, welcoming Egyptian Arabic:
 
 ---
 
+## 🛠️ Production Challenges, Error Handling & Engineering Post-Mortem
+
+During production hardening and staging runs for high-throughput courier fulfillment at the Al-Haram hub, several critical edge cases and runtime bottlenecks were uncovered and resolved. Below is a detailed engineering breakdown of the errors encountered, root cause investigations, and production-grade solutions implemented:
+
+---
+
+### 1. Shift Session Counter Reset Blocked (`بدء جلسة جديدة - تصفير العداد`)
+
+* **Issue / Symptom:**  
+  Warehouse supervisors reported that clicking **"بدء جلسة جديدة (تصفير العداد)"** on mobile devices and warehouse tablets appeared unresponsive or failed to reset the counter back to `#001`. In some instances, previously served drivers from older shifts lingered in the active waiting queue.
+* **Root Cause Analysis:**  
+  1. **Mobile WebView & Browser Dialog Suppression:** The original handler used synchronous `window.confirm()`. On mobile browsers (Safari on iOS, Chrome on Android, and inside embedded WebViews), native dialogs are frequently suppressed, blocked by pop-up policies, or fail silently without raising a JavaScript exception.
+  2. **Session Bleed in Active Queue Queries:** The backend function `getActiveQueue()` originally queried tickets filtered only by `site_id`, without filtering by `session_id`. Consequently, unarchived tickets from earlier sessions remained visible in the active queue even after a new session was created.
+  3. **Concurrency Locking on Calling:** `call_next_driver` prioritized older tickets by `joined_at`, causing dispatchers to call yesterday's unfinished tickets before newly joined couriers.
+* **Engineering Resolution:**  
+  * **Custom Accessible Modal:** Replaced native `window.confirm()` with a custom React modal (`isResetModalOpen`) in [`src/app/staff/page.tsx`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/src/app/staff/page.tsx) featuring clear Egyptian Arabic operational notices and instant optimistic UI clearing.
+  * **Automated Lingering Ticket Archival:** Updated `startNewSession()` in [`src/lib/queue-service.ts`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/src/lib/queue-service.ts) to atomically update any remaining active tickets (`waiting`, `called`, `processing`) from past sessions to `completed` upon new session creation.
+  * **Strict Session Scoping:** Scoped both `getActiveQueue()` and the `callNextDriver()` fallback query to `session_id = currentSession.id`.
+  * **Constraint Fallback:** Added defensive handling in `startNewSession()`: if a database constraint prevents inserting a duplicate date row, the system updates the existing session's `sequence_counter = 0` in-place.
+
+---
+
+### 2. Header Validation Failure & Key Whitespace (`TypeError: Headers.set`)
+
+* **Issue / Symptom:**  
+  Serverless functions crashed on cold starts with the following runtime error:
+  ```text
+  TypeError: Failed to parse URL / Headers.set: Invalid character in header field name or value
+  ```
+* **Root Cause Analysis:**  
+  When copying and pasting `SUPABASE_SERVICE_ROLE_KEY` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` into production hosting configuration dashboards or `.env` files, trailing newlines (`\n`) or carriage returns (`\r`) were inadvertently embedded into the environment variables. Standard Fetch implementations in modern Node.js and Next.js runtimes strictly enforce HTTP header character sets and throw fatal exceptions when a header value contains newline characters.
+* **Engineering Resolution:**  
+  * Introduced a robust `cleanSecret()` utility in both [`src/lib/supabase/admin.ts`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/src/lib/supabase/admin.ts) and [`src/lib/supabase/client.ts`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/src/lib/supabase/client.ts).
+  * Automatically strips surrounding quotes, trailing whitespaces, and embedded newline characters:
+    ```typescript
+    function cleanSecret(value: string | undefined): string | undefined {
+      if (!value) return undefined;
+      return value.trim().replace(/[\r\n]+/g, "").replace(/^["']|["']$/g, "");
+    }
+    ```
+
+---
+
+### 3. UI Jitter & Race Conditions During Fast Calling (`نده على اللي بعده`)
+
+* **Issue / Symptom:**  
+  When dispatchers tapped **"نده على اللي بعده"**, the queue number occasionally flickered, vanished for 2 to 4 seconds, or re-appeared in the waiting list before settling into the called state.
+* **Root Cause Analysis:**  
+  The dispatcher dashboard combines background polling (every 5 seconds) with Supabase Realtime WebSocket events. When calling `/api/queue/action`, the optimistic state update on the client conflicted with an incoming delayed polling cycle from before the write was committed, causing the UI to briefly render stale queue snapshots.
+* **Engineering Resolution:**  
+  * **Optimistic Transitions with Error Rollback:** The UI immediately moves the target ticket from `waiting` to `called` with instant badge transformation, storing the previous queue state for automatic rollback in case of network rejection.
+  * **Debounced Coalescing:** Implemented a 300ms debouncing mechanism (`scheduleRefresh`) using a React `debounceRef` to collapse simultaneous WebSocket updates and polling ticks into a single unified render cycle.
+  * **Database Row Locking (`FOR UPDATE SKIP LOCKED`):** The underlying PostgreSQL procedure `call_next_driver` safely skips locked rows, completely eliminating race conditions if two dispatchers tap "Call Next" simultaneously.
+
+---
+
+### 4. Audio Playback Restrictions & Missed Turn Siren on Mobile
+
+* **Issue / Symptom:**  
+  Couriers waiting on delivery bikes or in noisy warehouse bays frequently missed their turn notification because smartphone browsers silenced background audio or the alert was too brief.
+* **Root Cause Analysis:**  
+  1. Modern mobile operating systems (iOS and Android) enforce strict Autoplay Policies that suspend the `AudioContext` until direct user interaction.
+  2. Standard single-frequency notification chimes lack harmonic penetration against outdoor traffic and fulfillment warehouse noise.
+* **Engineering Resolution:**  
+  * **High-Penetration Dual-Frequency Siren:** Replaced the subtle chime with `playDriverTurnAlert()` in [`src/lib/audio.ts`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/src/lib/audio.ts), synthesizing a rapid 3-burst alternating siren (880Hz <-> 1760Hz) using Web Audio API square/triangle oscillators.
+  * **Hardware Haptic Vibration:** Coupled the audio siren with the HTML5 Vibration API (`navigator.vibrate([300, 150, 300, 150, 500])`), delivering intense tactile feedback directly in couriers' pockets.
+  * **Interactive Audio Unlock:** Added an audio-test button on the driver ticket screen so couriers can initialize and unlock the audio context on arrival.
+
+---
+
+### 5. Warehouse Bay Digital Signage Optimization
+
+* **Issue / Symptom:**  
+  The TV monitor screen initially displayed a static order preparation panel that provided little utility for newly arriving couriers pulling up to the station entrance.
+* **Root Cause Analysis:**  
+  Couriers needed to scan the entry QR code without parking, dismounting, and walking up to physical paper flyers at the dispatcher desk.
+* **Engineering Resolution:**  
+  * Upgraded the `/display` digital signage interface: removed the static prep card and integrated a high-contrast, scalable SVG QR Code pointing directly to the station join URL.
+  * Styled with prominent Egyptian Arabic instructions (`امسح الكود بكاميرا الموبايل عشان تاخد رقمك في الطابور`) and dynamic real-time status sync.
+
+---
+
 ## 🧪 Testing & Validation
 
 A comprehensive test suite in [`tests/queue-workflow.test.ts`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/tests/queue-workflow.test.ts) covers 16 mission-critical scenarios:
