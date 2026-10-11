@@ -90,8 +90,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("API /api/queue/action error:", error);
+    const errMessage = (error as Error)?.message || String(error);
     return NextResponse.json(
-      { success: false, error: "حصلت مشكلة في تنفيذ الإجراء، حاول تاني" },
+      { success: false, error: errMessage || "حصلت مشكلة في تنفيذ الإجراء، حاول تاني" },
       { status: 500 }
     );
   }
