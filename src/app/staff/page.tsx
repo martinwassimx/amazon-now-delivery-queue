@@ -145,6 +145,43 @@ export default function StaffDashboardPage() {
       return;
     }
 
+    // --- Optimistic UI update (instant feedback, no flicker) ---
+    // Capture a snapshot before the API call so we can roll back if needed
+    const previousQueue = activeQueue;
+    const now = new Date().toISOString();
+
+    if (action === "call_next") {
+      // Immediately mark the oldest waiting entry as "called" in the local state
+      const oldest = activeQueue
+        .filter((e) => e.status === "waiting")
+        .sort((a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime())[0];
+      if (oldest) {
+        setActiveQueue((prev) =>
+          prev.map((e) =>
+            e.id === oldest.id ? { ...e, status: "called", called_at: now, updated_at: now } : e
+          )
+        );
+        if (soundEnabled) playCallChime();
+      }
+    } else if ((action === "call" || action === "recall") && entryId) {
+      setActiveQueue((prev) =>
+        prev.map((e) =>
+          e.id === entryId ? { ...e, status: "called", called_at: now, updated_at: now } : e
+        )
+      );
+      if (soundEnabled) playCallChime();
+    } else if (action === "process" && entryId) {
+      setActiveQueue((prev) =>
+        prev.map((e) =>
+          e.id === entryId ? { ...e, status: "processing", processing_started_at: now, updated_at: now } : e
+        )
+      );
+    } else if ((action === "complete" || action === "skip" || action === "cancel") && entryId) {
+      // Remove from active queue immediately for terminal states
+      setActiveQueue((prev) => prev.filter((e) => e.id !== entryId));
+    }
+    // --- End optimistic update ---
+
     setActionLoading(true);
     try {
       const res = await fetch("/api/queue/action", {
@@ -159,16 +196,18 @@ export default function StaffDashboardPage() {
 
       const data = await res.json();
       if (!res.ok || !data.success) {
+        // Roll back optimistic update on failure
+        setActiveQueue(previousQueue);
         showNotification(data.error || "حصلت مشكلة أثناء تنفيذ الإجراء", "error");
       } else {
         showNotification(data.message || "تم تنفيذ الإجراء بنجاح", "success");
-        if (action === "call_next" || action === "call" || action === "recall") {
-          if (soundEnabled) playCallChime();
-        }
+        // Refresh to get authoritative state from server
         await refreshData();
       }
     } catch (err) {
       console.error("Action error:", err);
+      // Roll back optimistic update on network failure
+      setActiveQueue(previousQueue);
       showNotification("فشل الاتصال بالخادم، حاول تاني", "error");
     } finally {
       setActionLoading(false);
