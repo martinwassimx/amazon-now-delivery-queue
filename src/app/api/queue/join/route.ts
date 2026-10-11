@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     const { entry, isDuplicate } = await joinQueue({
       site_id: body.site_id,
       driver_name: body.driver_name.trim(),
-      order_reference: body.order_reference?.trim() || null,
+      order_reference: body.order_reference?.trim() || undefined,
       idempotency_key: body.idempotency_key.trim(),
     });
 
