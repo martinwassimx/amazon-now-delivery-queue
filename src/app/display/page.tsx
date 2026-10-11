@@ -11,8 +11,10 @@ import {
   Package, 
   CheckCircle2, 
   Clock, 
-  Truck 
+  Truck,
+  QrCode 
 } from "lucide-react";
+import QRCode from "qrcode";
 import { QueueEntry, QueueStats } from "@/types/queue";
 import { formatQueueNumber, formatCairoTime } from "@/lib/date-format";
 import { playCallChime } from "@/lib/audio";
@@ -24,6 +26,7 @@ export default function PublicDisplayPage() {
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [qrPngDataUrl, setQrPngDataUrl] = useState<string>("");
   const previousCalledRef = useRef<number | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -93,6 +96,25 @@ export default function PublicDisplayPage() {
       }
     };
   }, [soundEnabled]);
+
+  useEffect(() => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    if (origin) {
+      QRCode.toDataURL(
+        `${origin}/`,
+        {
+          width: 480,
+          margin: 1.5,
+          color: { dark: "#090d16", light: "#ffffff" },
+        },
+        (err, url) => {
+          if (!err && url) {
+            setQrPngDataUrl(url);
+          }
+        }
+      );
+    }
+  }, []);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -221,46 +243,53 @@ export default function PublicDisplayPage() {
           </div>
         </div>
 
-        {/* Right Columns: "جاري تجهيز الطلب" & "الأدوار اللي جاية" (5 cols) */}
+        {/* Right Columns: "ادخل الطابور من موبايلك (QR Code)" & "الأدوار اللي جاية" (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-6 justify-between">
-          {/* Section: جاري تجهيز الطلب (Processing) */}
-          <div className="flex-1 rounded-3xl bg-slate-900/90 border border-indigo-500/30 p-5 sm:p-6 shadow-xl flex flex-col justify-between">
+          {/* Section: كود الدخول في الطابور عبر QR (Scan QR to Join) */}
+          <div className="flex-1 rounded-3xl bg-gradient-to-br from-slate-900/95 via-slate-900 to-slate-950 border-2 border-amber-500/40 p-5 sm:p-6 shadow-2xl flex flex-col justify-between relative overflow-hidden">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm">
-                <Package className="w-4 h-4" />
-                <span>جاري تجهيز الطلب ({processingEntries.length})</span>
+              <div className="flex items-center gap-2.5 text-amber-400 font-extrabold text-sm sm:text-base">
+                <QrCode className="w-5 h-5 text-amber-400" />
+                <span>احجز دورك الآن من موبايلك</span>
               </div>
-              <span className="text-xs text-slate-500 font-mono">PREPARING</span>
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 font-mono font-bold border border-amber-500/30">
+                SCAN QR
+              </span>
             </div>
 
-            <div className="my-3">
-              {processingEntries.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-6">
-                  لا توجد طلبات قيد التجهيز حالياً
-                </p>
+            <div className="my-3 flex items-center justify-center gap-5 sm:gap-6 flex-col sm:flex-row text-center sm:text-start">
+              {qrPngDataUrl ? (
+                <div className="p-2.5 bg-white rounded-2xl shadow-2xl shrink-0 border-2 border-amber-400/60 ring-4 ring-amber-500/10">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={qrPngDataUrl}
+                    alt="امسح الـ QR لحجز دورك في الطابور"
+                    className="w-28 h-28 sm:w-36 sm:h-36 object-contain rounded-xl"
+                  />
+                </div>
               ) : (
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
-                  {processingEntries.map((e) => (
-                    <div
-                      key={e.id}
-                      className="p-3 rounded-2xl bg-slate-950 border border-indigo-500/40 text-center"
-                    >
-                      <span className="font-mono text-2xl font-black text-indigo-300 block">
-                        {formatQueueNumber(e.queue_number)}
-                      </span>
-                      {e.driver_name && (
-                        <span className="text-[10px] text-slate-400 truncate block mt-0.5">
-                          {e.driver_name}
-                        </span>
-                      )}
-                    </div>
-                  ))}
+                <div className="w-28 h-28 sm:w-36 sm:h-36 bg-slate-950 border border-slate-800 rounded-2xl flex items-center justify-center shrink-0">
+                  <QrCode className="w-12 h-12 text-slate-600 animate-pulse" />
                 </div>
               )}
+
+              <div className="space-y-2">
+                <h3 className="text-base sm:text-lg font-black text-white">
+                  امسح الكود بكاميرا الموبايل
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-xs">
+                  وجّه كاميرا هاتفك نحو الكود للدخول في الطابور ومتابعة دورك لحظة بلحظة مع صوت تنبيه لما ييجي وقت استلامك.
+                </p>
+                <div className="inline-flex items-center gap-2 text-xs text-emerald-400 font-bold pt-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>الطابور مفتوح ويستقبل مناديب حالياً</span>
+                </div>
+              </div>
             </div>
 
-            <div className="text-[11px] text-indigo-300/70 pt-2 border-t border-slate-800/80">
-              الشحنات دي بتتجهز في المخزن وهتكون عند الشباك قريباً
+            <div className="text-[11px] text-slate-400 pt-2 border-t border-slate-800/80 flex items-center justify-between font-mono">
+              <span className="text-slate-400">محطة توزيع أمازون ناو — الهرم</span>
+              <span className="text-amber-400/90 font-bold">مكتب تسليم السائقين</span>
             </div>
           </div>
 

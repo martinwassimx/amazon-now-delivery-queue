@@ -19,7 +19,7 @@ import confetti from "canvas-confetti";
 import { QueueEntry } from "@/types/queue";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatQueueNumber, formatCairoTime } from "@/lib/date-format";
-import { playCallChime, triggerVibration } from "@/lib/audio";
+import { playDriverTurnAlert, unlockAudioContext, triggerVibration } from "@/lib/audio";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 function TicketContent({
@@ -37,6 +37,17 @@ function TicketContent({
   const [cooldownSec, setCooldownSec] = useState<number>(0);
   const previousStatusRef = useRef<string | null>(null);
   const retryCountRef = useRef<number>(0);
+
+  // Unlock Web Audio API on first mobile tap/click
+  useEffect(() => {
+    const handleUnlock = () => unlockAudioContext();
+    window.addEventListener("click", handleUnlock, { once: true });
+    window.addEventListener("touchstart", handleUnlock, { once: true });
+    return () => {
+      window.removeEventListener("click", handleUnlock);
+      window.removeEventListener("touchstart", handleUnlock);
+    };
+  }, []);
 
   const formatCooldown = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -84,17 +95,17 @@ function TicketContent({
         } catch {}
       }
 
-      // Check if status changed to 'called' to alert driver!
+      // Check if status changed to 'called' to alert driver with a loud siren/alarm!
       if (previousStatusRef.current && previousStatusRef.current !== "called" && current.status === "called") {
         if (soundEnabled) {
-          playCallChime();
+          playDriverTurnAlert();
         }
-        triggerVibration([300, 150, 300, 150, 500]);
+        triggerVibration([500, 200, 500, 200, 800, 300, 800]);
         // Trigger celebratory confetti
         try {
           confetti({
-            particleCount: 80,
-            spread: 70,
+            particleCount: 100,
+            spread: 80,
             origin: { y: 0.6 },
           });
         } catch {}
@@ -238,14 +249,24 @@ function TicketContent({
 
       {/* Prominent Banner when CALLED */}
       {isCalled && (
-        <div className="my-3 p-4 rounded-2xl bg-blue-600 border border-blue-400 text-white shadow-2xl animate-urgent-glow text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white text-blue-600 mb-1">
-            <Bell className="w-7 h-7 animate-bounce" />
+        <div className="my-3 p-5 rounded-3xl bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 border-2 border-blue-300 text-white shadow-2xl animate-urgent-glow text-center space-y-3">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-white text-blue-600 shadow-lg mb-1 ring-4 ring-white/20">
+            <Bell className="w-8 h-8 animate-bounce" />
           </div>
-          <h2 className="text-2xl font-black tracking-tight">دورك جه! اتفضل استلم طلبك</h2>
-          <p className="text-sm text-blue-100 font-medium">
+          <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow">
+            دورك جه! اتفضل استلم طلبك
+          </h2>
+          <p className="text-sm sm:text-base text-blue-50 font-semibold max-w-sm mx-auto">
             اتوجه لشباك التسليم فوراً وورّي الموظف رقم تذكرتك
           </p>
+
+          <button
+            onClick={() => playDriverTurnAlert()}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-white text-blue-700 hover:bg-blue-50 font-black text-xs sm:text-sm shadow-xl transition active:scale-95 cursor-pointer"
+          >
+            <Volume2 className="w-4 h-4 text-blue-600 animate-pulse" />
+            <span>تشغيل صوت التنبيه</span>
+          </button>
         </div>
       )}
 

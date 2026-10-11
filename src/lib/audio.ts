@@ -84,6 +84,71 @@ export function playUrgentChime() {
 }
 
 /**
+ * Unlock audio context on user interaction to comply with mobile autoplay policies
+ */
+export function unlockAudioContext() {
+  try {
+    const ctx = getAudioContext();
+    if (ctx && ctx.state === "suspended") {
+      ctx.resume();
+    }
+  } catch {}
+}
+
+/**
+ * Play a high-impact, loud alert sequence when a driver's turn is called (تنبيه قوي وواضح للمندوب)
+ * Designed for noisy warehouse environments and motorcycles.
+ */
+export function playDriverTurnAlert() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      ctx.resume();
+    }
+
+    const now = ctx.currentTime;
+
+    // Pattern: 2 rounds of distinct high-pitch attention alert bursts
+    const bursts = [
+      // Burst 1 (0.0s - 0.45s)
+      { freq: 880, start: 0.0, dur: 0.12, type: "sine" as OscillatorType, vol: 0.7 },
+      { freq: 1174.66, start: 0.14, dur: 0.12, type: "triangle" as OscillatorType, vol: 0.75 },
+      { freq: 1567.98, start: 0.28, dur: 0.18, type: "sine" as OscillatorType, vol: 0.8 },
+      // Burst 2 (0.55s - 1.05s) - repeat with higher impact
+      { freq: 880, start: 0.55, dur: 0.12, type: "sine" as OscillatorType, vol: 0.75 },
+      { freq: 1174.66, start: 0.69, dur: 0.12, type: "triangle" as OscillatorType, vol: 0.8 },
+      { freq: 1760.0, start: 0.83, dur: 0.25, type: "triangle" as OscillatorType, vol: 0.85 },
+    ];
+
+    bursts.forEach(({ freq, start, dur, type, vol }) => {
+      const t = now + start;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+
+      // Fast attack, smooth decay
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(vol, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(t);
+      osc.stop(t + dur);
+    });
+
+    // Intense mobile vibration pattern: long pulses
+    triggerVibration([500, 200, 500, 200, 800, 300, 800]);
+  } catch (err) {
+    console.warn("Driver turn alert failed to play:", err);
+  }
+}
+
+/**
  * Trigger mobile haptic vibration
  */
 export function triggerVibration(pattern: number[] = [200, 100, 200, 100, 400]) {

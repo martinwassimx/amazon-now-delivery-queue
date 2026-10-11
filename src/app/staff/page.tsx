@@ -422,8 +422,8 @@ export default function StaffDashboardPage() {
           </div>
         </div>
 
-        {/* 4 Summary Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* 3 Summary Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
           {/* 1. عدد اللي مستنيين */}
           <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-amber-500/20 shadow-md space-y-2">
             <div className="flex items-center justify-between text-slate-400">
@@ -448,19 +448,7 @@ export default function StaffDashboardPage() {
             <p className="text-[11px] text-slate-500">جاهزين عند الشباك</p>
           </div>
 
-          {/* 3. الطلبات الجاري تجهيزها */}
-          <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-indigo-500/20 shadow-md space-y-2">
-            <div className="flex items-center justify-between text-slate-400">
-              <span className="text-xs sm:text-sm font-semibold">جاري تجهيزها</span>
-              <Package className="w-4 h-4 text-indigo-400" />
-            </div>
-            <div className="text-3xl sm:text-4xl font-black text-indigo-400">
-              {processingCount}
-            </div>
-            <p className="text-[11px] text-slate-500">تحت التحضير الفعلي</p>
-          </div>
-
-          {/* 4. الطلبات اللي خلصت النهارده */}
+          {/* 3. الطلبات اللي خلصت النهارده */}
           <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-emerald-500/20 shadow-md space-y-2">
             <div className="flex items-center justify-between text-slate-400">
               <span className="text-xs sm:text-sm font-semibold">خلصت النهارده</span>
@@ -489,7 +477,7 @@ export default function StaffDashboardPage() {
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
             <button
               onClick={() => setStatusFilter("all")}
-              className={`px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
                 statusFilter === "all"
                   ? "bg-amber-500 text-slate-950"
                   : "bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800"
@@ -499,7 +487,7 @@ export default function StaffDashboardPage() {
             </button>
             <button
               onClick={() => setStatusFilter("waiting")}
-              className={`px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
                 statusFilter === "waiting"
                   ? "bg-amber-500 text-slate-950"
                   : "bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800"
@@ -509,23 +497,13 @@ export default function StaffDashboardPage() {
             </button>
             <button
               onClick={() => setStatusFilter("called")}
-              className={`px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
                 statusFilter === "called"
                   ? "bg-blue-600 text-white"
                   : "bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800"
               }`}
             >
               اتنده عليه ({calledCount})
-            </button>
-            <button
-              onClick={() => setStatusFilter("processing")}
-              className={`px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-                statusFilter === "processing"
-                  ? "bg-indigo-600 text-white"
-                  : "bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800"
-              }`}
-            >
-              جاري تجهيزه ({processingCount})
             </button>
           </div>
         </div>
@@ -619,28 +597,22 @@ export default function StaffDashboardPage() {
                             </button>
                           )}
 
-                          {/* If called: Recall or Start Processing or Complete */}
+                          {/* If called: Complete or Recall */}
                           {entry.status === "called" && (
                             <>
                               <button
-                                onClick={() => handleAction("recall", entry.id)}
-                                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition border border-slate-700"
-                                title="إعادة النداء بصوت"
-                              >
-                                <span>نده تاني</span>
-                              </button>
-                              <button
-                                onClick={() => handleAction("process", entry.id)}
-                                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition shadow"
-                              >
-                                <span>ابدأ التجهيز</span>
-                              </button>
-                              <button
                                 onClick={() => handleAction("complete", entry.id)}
-                                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow flex items-center gap-1"
+                                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition shadow flex items-center gap-1.5 active:scale-95 cursor-pointer"
                               >
                                 <Check className="w-3.5 h-3.5" />
                                 <span>تم استلام الطلب</span>
+                              </button>
+                              <button
+                                onClick={() => handleAction("recall", entry.id)}
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition border border-slate-700 active:scale-95 cursor-pointer"
+                                title="إعادة النداء بصوت"
+                              >
+                                <span>نده تاني</span>
                               </button>
                             </>
                           )}
@@ -741,20 +713,14 @@ export default function StaffDashboardPage() {
                       <>
                         <button
                           onClick={() => handleAction("complete", entry.id)}
-                          className="flex-1 h-11 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow"
+                          className="flex-1 h-11 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow active:scale-95 cursor-pointer"
                         >
                           <Check className="w-4 h-4" />
                           <span>تم استلام الطلب</span>
                         </button>
                         <button
-                          onClick={() => handleAction("process", entry.id)}
-                          className="px-3 h-11 rounded-xl bg-indigo-600 text-white font-bold text-xs"
-                        >
-                          بدء التجهيز
-                        </button>
-                        <button
                           onClick={() => handleAction("recall", entry.id)}
-                          className="px-2.5 h-11 rounded-xl bg-slate-800 text-slate-300 text-xs"
+                          className="px-3.5 h-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 active:scale-95 cursor-pointer"
                           title="إعادة النداء"
                         >
                           نداء تاني
