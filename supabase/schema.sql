@@ -1,7 +1,18 @@
 -- ==============================================================================
--- Amazon Now Delivery Queue Management System (نظام طابور التوصيل - العامية المصرية)
--- Concurrency-Safe Supabase PostgreSQL Schema & Realtime Setup
+-- Amazon Now Delivery Queue Management System (نظام طابور التوصيل - محطة الهرم)
+-- Clean One-Click Reset & Setup Script for Supabase SQL Editor
 -- ==============================================================================
+
+-- 0. Clean drop existing functions and tables (حذف النسخ السابقة لتثبيت نظيف)
+DROP FUNCTION IF EXISTS join_queue_atomic(UUID, TEXT, TEXT, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS call_next_driver(UUID, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS update_queue_entry_status(UUID, TEXT, TEXT, TEXT) CASCADE;
+
+DROP TABLE IF EXISTS audit_logs CASCADE;
+DROP TABLE IF EXISTS queue_entries CASCADE;
+DROP TABLE IF EXISTS staff_profiles CASCADE;
+DROP TABLE IF EXISTS queue_sessions CASCADE;
+DROP TABLE IF EXISTS sites CASCADE;
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -385,15 +396,31 @@ BEGIN
 END $$;
 
 -- ==============================================================================
--- SEED DATA (بيانات أولية لمحطة القاهرة الرئيسية)
+-- SEED DATA (بيانات أولية لمحطة توزيع أمازون ناو — الهرم)
 -- ==============================================================================
 INSERT INTO sites (id, name, slug, code, address, is_active)
 VALUES (
     '00000000-0000-0000-0000-000000000001'::UUID,
-    'أمازون ناو - محطة توزيع القاهرة (المعادي)',
-    'cairo-main',
-    'CAI-01',
-    'المنطقة الصناعية، المعادي، القاهرة',
+    'محطة توزيع أمازون ناو — الهرم',
+    'haram-hub',
+    'HARM-01',
+    'شارع الهرم الرئيسي، الجيزة',
     TRUE
 )
-ON CONFLICT (slug) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    slug = EXCLUDED.slug,
+    code = EXCLUDED.code,
+    address = EXCLUDED.address,
+    is_active = TRUE;
+
+INSERT INTO queue_sessions (site_id, session_date, sequence_counter, is_active)
+VALUES (
+    '00000000-0000-0000-0000-000000000001'::UUID,
+    CURRENT_DATE,
+    0,
+    TRUE
+)
+ON CONFLICT (site_id, session_date) DO UPDATE SET
+    sequence_counter = 0,
+    is_active = TRUE;
