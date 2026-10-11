@@ -159,16 +159,6 @@ export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: Que
       } else {
         console.warn("Supabase join_queue_atomic failed, executing direct table insert:", error);
 
-        // 3. Direct table fallback if RPC is unavailable
-        // Get highest queue number
-        const { data: maxRow } = await adminClient
-          .from("queue_entries")
-          .select("queue_number")
-          .eq("site_id", siteId)
-          .order("queue_number", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
         let activeSessionId = session.id;
         if (!activeSessionId || activeSessionId.startsWith("local-")) {
           const { data: dbSession } = await adminClient
@@ -196,9 +186,25 @@ export async function joinQueue(params: DriverJoinRequest): Promise<{ entry: Que
           }
         }
 
+        // Get highest queue number for THIS session
+        const { data: maxRow } = await adminClient
+          .from("queue_entries")
+          .select("queue_number")
+          .eq("site_id", siteId)
+          .eq("session_id", activeSessionId)
+          .order("queue_number", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
         const queueNumber = (maxRow?.queue_number || 0) + 1;
         const now = new Date().toISOString();
         const ticketToken = crypto.randomBytes(24).toString("hex");
+
+        // Keep session counter synchronized
+        await adminClient
+          .from("queue_sessions")
+          .update({ sequence_counter: queueNumber })
+          .eq("id", activeSessionId);
 
         const { data: inserted, error: insertError } = await adminClient
           .from("queue_entries")
@@ -405,6 +411,49 @@ export async function callNextDriver(siteId: string = DEFAULT_SITE_ID, staffName
           updated_at: row.called_at,
         };
       }
+
+      // Direct Supabase table fallback if RPC returned empty or failed:
+      const { data: waitingEntry } = await adminClient
+        .from("queue_entries")
+        .select("*")
+        .eq("site_id", siteId)
+        .eq("status", "waiting")
+        .order("joined_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (waitingEntry) {
+        const now = new Date().toISOString();
+        const { data: updated, error: updateErr } = await adminClient
+          .from("queue_entries")
+          .update({
+            status: "called",
+            called_at: now,
+            updated_at: now,
+          })
+          .eq("id", waitingEntry.id)
+          .select()
+          .maybeSingle();
+
+        if (!updateErr && updated) {
+          try {
+            await adminClient.from("audit_logs").insert({
+              site_id: siteId,
+              entry_id: updated.id,
+              queue_number: updated.queue_number,
+              action: "call",
+              action_label_ar: "نده على اللي بعده",
+              performed_by_name: staffName,
+              details: `تم النداء على السائق صاحب الرقم ${updated.queue_number}`,
+            });
+          } catch {}
+
+          return enrichEntryMetrics(updated as QueueEntry, []);
+        }
+      } else {
+        // Explicitly return null if no waiting entries in database
+        return null;
+      }
     } catch (err) {
       console.error("Supabase call_next_driver error:", err);
     }
@@ -461,8 +510,43 @@ export async function updateEntryStatus(
           .from("queue_entries")
           .select("*")
           .eq("id", entryId)
-          .single();
+          .maybeSingle();
         if (updatedEntry) return updatedEntry as QueueEntry;
+      }
+
+      // Direct Supabase table fallback
+      const now = new Date().toISOString();
+      const updatePayload: Record<string, unknown> = {
+        status: newStatus,
+        updated_at: now,
+      };
+      if (newStatus === "called") updatePayload.called_at = now;
+      if (newStatus === "processing") updatePayload.processing_started_at = now;
+      if (newStatus === "completed") updatePayload.completed_at = now;
+      if (newStatus === "skipped") updatePayload.skipped_at = now;
+      if (newStatus === "cancelled") updatePayload.cancelled_at = now;
+
+      const { data: updatedDirect } = await adminClient
+        .from("queue_entries")
+        .update(updatePayload)
+        .eq("id", entryId)
+        .select()
+        .maybeSingle();
+
+      if (updatedDirect) {
+        try {
+          await adminClient.from("audit_logs").insert({
+            site_id: updatedDirect.site_id,
+            entry_id: updatedDirect.id,
+            queue_number: updatedDirect.queue_number,
+            action: newStatus === "called" ? "recall" : newStatus === "processing" ? "process" : newStatus === "completed" ? "complete" : newStatus === "skipped" ? "skip" : "cancel",
+            action_label_ar: newStatus,
+            performed_by_name: staffName,
+            details: details || `تم تغيير الحالة إلى ${newStatus}`,
+          });
+        } catch {}
+
+        return updatedDirect as QueueEntry;
       }
     } catch (err) {
       console.error("Supabase update_queue_entry_status error:", err);
@@ -523,7 +607,19 @@ export async function updateEntryStatus(
   return enrichEntryMetrics(entry, store.entries);
 }
 
+// Short in-memory cache for session to avoid excessive DB polling
+let sessionCache: { [siteId: string]: { session: SessionInfo; expires: number } } = {};
+
+export function invalidateSessionCache(siteId: string = DEFAULT_SITE_ID) {
+  delete sessionCache[siteId];
+}
+
 export async function getCurrentSession(siteId: string = DEFAULT_SITE_ID): Promise<SessionInfo> {
+  const cached = sessionCache[siteId];
+  if (cached && cached.expires > Date.now()) {
+    return cached.session;
+  }
+
   const adminClient = getSupabaseAdminClient();
 
   if (adminClient && isSupabaseAdminConfigured()) {
@@ -537,7 +633,7 @@ export async function getCurrentSession(siteId: string = DEFAULT_SITE_ID): Promi
         .maybeSingle();
 
       if (!error && data) {
-        return {
+        const session: SessionInfo = {
           id: data.id,
           site_id: data.site_id,
           session_date: data.session_date,
@@ -545,6 +641,8 @@ export async function getCurrentSession(siteId: string = DEFAULT_SITE_ID): Promi
           is_active: data.is_active ?? true,
           created_at: data.created_at,
         };
+        sessionCache[siteId] = { session, expires: Date.now() + 3500 };
+        return session;
       }
     } catch (err) {
       console.warn("Supabase getCurrentSession error, falling back to local:", err);
@@ -566,6 +664,7 @@ export async function getCurrentSession(siteId: string = DEFAULT_SITE_ID): Promi
 }
 
 export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffName: string = "فريق العمل"): Promise<SessionInfo> {
+  invalidateSessionCache(siteId);
   const adminClient = getSupabaseAdminClient();
   const now = new Date().toISOString();
 
@@ -573,16 +672,18 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
     try {
       const today = new Date().toISOString().slice(0, 10);
 
-      // Check if session already exists for today
+      // Check if session exists for today
       const { data: existingSession } = await adminClient
         .from("queue_sessions")
         .select("*")
         .eq("site_id", siteId)
         .eq("session_date", today)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (existingSession) {
-        // Delete previous session to cascade clean reset
+        // Cascade delete previous session so counter resets cleanly to 0 and queue starts from 1
         await adminClient
           .from("queue_sessions")
           .delete()
@@ -602,15 +703,17 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
         .single();
 
       if (!createError && newSession) {
-        await adminClient.from("audit_logs").insert({
-          site_id: siteId,
-          action: "manual_override",
-          action_label_ar: "بدء جلسة جديدة",
-          performed_by_name: staffName,
-          details: "تم بدء جلسة عمل جديدة وتصفير عداد الطابور بنجاح",
-        });
+        try {
+          await adminClient.from("audit_logs").insert({
+            site_id: siteId,
+            action: "manual_override",
+            action_label_ar: "بدء جلسة جديدة",
+            performed_by_name: staffName,
+            details: "تم بدء جلسة عمل جديدة وتصفير عداد الطابور بنجاح",
+          });
+        } catch {}
 
-        return {
+        const res: SessionInfo = {
           id: newSession.id,
           site_id: newSession.site_id,
           session_date: newSession.session_date,
@@ -618,6 +721,8 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
           is_active: true,
           created_at: newSession.created_at,
         };
+        sessionCache[siteId] = { session: res, expires: Date.now() + 3500 };
+        return res;
       }
     } catch (err) {
       console.error("Supabase startNewSession error:", err);
@@ -627,6 +732,7 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
   // Memory fallback
   const store = getMemoryStore();
   store.counter = 0;
+  store.entries = [];
   store.currentSession = {
     id: "session-" + Date.now(),
     site_id: siteId,
@@ -654,6 +760,7 @@ export async function setSessionActive(
   isActive: boolean,
   staffName: string = "فريق العمل"
 ): Promise<SessionInfo> {
+  invalidateSessionCache(siteId);
   const adminClient = getSupabaseAdminClient();
   const now = new Date().toISOString();
 
@@ -676,15 +783,17 @@ export async function setSessionActive(
           .single();
 
         if (!error && data) {
-          await adminClient.from("audit_logs").insert({
-            site_id: siteId,
-            action: "manual_override",
-            action_label_ar: isActive ? "فتح الطابور" : "إغلاق الطابور",
-            performed_by_name: staffName,
-            details: isActive ? "تم فتح الطابور واستقبال المناديب" : "تم إغلاق الطابور ووقف حجز أدوار جديدة",
-          });
+          try {
+            await adminClient.from("audit_logs").insert({
+              site_id: siteId,
+              action: "manual_override",
+              action_label_ar: isActive ? "فتح الطابور" : "إغلاق الطابور",
+              performed_by_name: staffName,
+              details: isActive ? "تم فتح الطابور واستقبال المناديب" : "تم إغلاق الطابور ووقف حجز أدوار جديدة",
+            });
+          } catch {}
 
-          return {
+          const res: SessionInfo = {
             id: data.id,
             site_id: data.site_id,
             session_date: data.session_date,
@@ -692,6 +801,8 @@ export async function setSessionActive(
             is_active: isActive,
             created_at: data.created_at,
           };
+          sessionCache[siteId] = { session: res, expires: Date.now() + 3500 };
+          return res;
         }
       }
     } catch (err) {

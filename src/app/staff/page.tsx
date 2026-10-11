@@ -62,16 +62,11 @@ export default function StaffDashboardPage() {
 
   const previousCountRef = useRef<number>(0);
 
-  // Fetch active queue and stats
+  // Fetch active queue and stats atomically
   const refreshData = async () => {
     try {
-      const [queueRes, statsRes] = await Promise.all([
-        fetch("/api/queue/active"),
-        fetch("/api/queue/stats"),
-      ]);
-
+      const queueRes = await fetch("/api/queue/active");
       const queueData = await queueRes.json();
-      const statsData = await statsRes.json();
 
       if (queueData.success) {
         const entries = queueData.entries as QueueEntry[];
@@ -81,10 +76,10 @@ export default function StaffDashboardPage() {
         }
         previousCountRef.current = entries.length;
         setActiveQueue(entries);
-      }
 
-      if (statsData.success) {
-        setStats(statsData.stats);
+        if (queueData.stats) {
+          setStats(queueData.stats);
+        }
       }
 
       setLoading(false);
@@ -137,6 +132,11 @@ export default function StaffDashboardPage() {
     action: "call_next" | "call" | "recall" | "process" | "complete" | "skip" | "cancel",
     entryId?: string
   ) => {
+    if (action === "call_next" && waitingCount === 0) {
+      showNotification("مفيش حد مستني في الطابور دلوقتي", "error");
+      return;
+    }
+
     setActionLoading(true);
     try {
       const res = await fetch("/api/queue/action", {
@@ -212,6 +212,11 @@ export default function StaffDashboardPage() {
       handleSessionAction("start_new");
     }
   };
+
+  // Derive strictly synchronized counts directly from activeQueue
+  const waitingCount = activeQueue.filter((e) => e.status === "waiting").length;
+  const calledCount = activeQueue.filter((e) => e.status === "called").length;
+  const processingCount = activeQueue.filter((e) => e.status === "processing").length;
 
   // Filter queue entries
   const filteredQueue = activeQueue.filter((entry) => {
@@ -335,7 +340,7 @@ export default function StaffDashboardPage() {
             <h1 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
               <span>إدارة الطابور النشط</span>
               <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold">
-                {activeQueue.length} سائق في الانتظار
+                {waitingCount} سائق في الانتظار
               </span>
             </h1>
             <p className="text-xs text-slate-400">
@@ -356,14 +361,14 @@ export default function StaffDashboardPage() {
             <button
               id="call-next-driver-button"
               onClick={() => handleAction("call_next")}
-              disabled={actionLoading || stats.waiting_count === 0}
-              className="flex-1 sm:flex-none h-14 px-6 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-black text-base sm:text-lg flex items-center justify-center gap-3 shadow-lg transition duration-150 cursor-pointer"
+              disabled={actionLoading || waitingCount === 0}
+              className="flex-1 sm:flex-none h-14 px-6 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black text-base sm:text-lg flex items-center justify-center gap-3 shadow-lg transition duration-150 cursor-pointer"
             >
               <Bell className="w-5 h-5" />
               <span>نده على اللي بعده</span>
-              {stats.waiting_count > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-slate-950 text-amber-400 text-xs font-mono">
-                  {stats.waiting_count}
+              {waitingCount > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-slate-950 text-amber-400 text-xs font-mono font-bold">
+                  {waitingCount}
                 </span>
               )}
             </button>
@@ -379,7 +384,7 @@ export default function StaffDashboardPage() {
               <Users className="w-4 h-4 text-amber-400" />
             </div>
             <div className="text-3xl sm:text-4xl font-black text-amber-400">
-              {stats.waiting_count}
+              {waitingCount}
             </div>
             <p className="text-[11px] text-slate-500">في انتظار النداء</p>
           </div>
@@ -391,7 +396,7 @@ export default function StaffDashboardPage() {
               <Bell className="w-4 h-4 text-blue-400" />
             </div>
             <div className="text-3xl sm:text-4xl font-black text-blue-400">
-              {stats.called_count}
+              {calledCount}
             </div>
             <p className="text-[11px] text-slate-500">جاهزين عند الشباك</p>
           </div>
@@ -403,7 +408,7 @@ export default function StaffDashboardPage() {
               <Package className="w-4 h-4 text-indigo-400" />
             </div>
             <div className="text-3xl sm:text-4xl font-black text-indigo-400">
-              {stats.processing_count}
+              {processingCount}
             </div>
             <p className="text-[11px] text-slate-500">تحت التحضير الفعلي</p>
           </div>
@@ -453,7 +458,7 @@ export default function StaffDashboardPage() {
                   : "bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800"
               }`}
             >
-              مستني دورك ({stats.waiting_count})
+              مستني دورك ({waitingCount})
             </button>
             <button
               onClick={() => setStatusFilter("called")}
@@ -463,7 +468,7 @@ export default function StaffDashboardPage() {
                   : "bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800"
               }`}
             >
-              اتنده عليه ({stats.called_count})
+              اتنده عليه ({calledCount})
             </button>
             <button
               onClick={() => setStatusFilter("processing")}
@@ -473,7 +478,7 @@ export default function StaffDashboardPage() {
                   : "bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800"
               }`}
             >
-              جاري تجهيزه ({stats.processing_count})
+              جاري تجهيزه ({processingCount})
             </button>
           </div>
         </div>

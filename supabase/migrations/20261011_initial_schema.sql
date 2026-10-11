@@ -145,36 +145,27 @@ BEGIN
         RETURN;
     END IF;
 
-    -- 2. Find or create today's active session for the site, WITH ROW LOCK
-    LOOP
-        SELECT id INTO v_session_id
-        FROM queue_sessions
-        WHERE site_id = p_site_id
-          AND session_date = CURRENT_DATE
-          AND is_active = TRUE
-        FOR UPDATE;
+    -- 2. Find or create session for the site, WITH ROW LOCK
+    SELECT id INTO v_session_id
+    FROM queue_sessions
+    WHERE site_id = p_site_id
+    ORDER BY created_at DESC
+    LIMIT 1
+    FOR UPDATE;
 
-        IF FOUND THEN
-            EXIT;
-        END IF;
-
-        -- Create session if not found
+    IF v_session_id IS NULL THEN
         BEGIN
             INSERT INTO queue_sessions (site_id, session_date, sequence_counter, is_active)
             VALUES (p_site_id, CURRENT_DATE, 0, TRUE)
             RETURNING id INTO v_session_id;
-            
-            -- Lock newly created row
+        EXCEPTION WHEN unique_violation THEN
             SELECT id INTO v_session_id
             FROM queue_sessions
-            WHERE id = v_session_id
-            FOR UPDATE;
-            
-            EXIT;
-        EXCEPTION WHEN unique_violation THEN
-            -- Another concurrent transaction created it; loop to lock it
+            WHERE site_id = p_site_id
+            ORDER BY created_at DESC
+            LIMIT 1;
         END;
-    END LOOP;
+    END IF;
 
     -- 3. Atomically increment sequence counter
     UPDATE queue_sessions

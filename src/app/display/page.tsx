@@ -28,31 +28,26 @@ export default function PublicDisplayPage() {
 
   const fetchDisplayData = async () => {
     try {
-      const [queueRes, statsRes] = await Promise.all([
-        fetch("/api/queue/active"),
-        fetch("/api/queue/stats"),
-      ]);
-
+      const queueRes = await fetch("/api/queue/active");
       const qData = await queueRes.json();
-      const sData = await statsRes.json();
 
       if (qData.success) {
         setActiveQueue(qData.entries);
-      }
 
-      if (sData.success) {
-        const newStats = sData.stats as QueueStats;
-        // Check if a new number was called
-        if (
-          newStats.current_called_number &&
-          newStats.current_called_number !== previousCalledRef.current
-        ) {
-          if (soundEnabled && previousCalledRef.current !== null) {
-            playCallChime();
+        if (qData.stats) {
+          const newStats = qData.stats as QueueStats;
+          // Check if a new number was called
+          if (
+            newStats.current_called_number &&
+            newStats.current_called_number !== previousCalledRef.current
+          ) {
+            if (soundEnabled && previousCalledRef.current !== null) {
+              playCallChime();
+            }
+            previousCalledRef.current = newStats.current_called_number;
           }
-          previousCalledRef.current = newStats.current_called_number;
+          setStats(newStats);
         }
-        setStats(newStats);
       }
     } catch (err) {
       console.error("Failed to update public display:", err);

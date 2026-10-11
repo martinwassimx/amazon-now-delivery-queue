@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveQueue } from "@/lib/queue-service";
+import { getActiveQueue, getQueueStats } from "@/lib/queue-service";
 
 export const dynamic = "force-dynamic";
 
@@ -8,12 +8,16 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get("site_id") || undefined;
 
-    const entries = await getActiveQueue(siteId);
+    const [entries, stats] = await Promise.all([
+      getActiveQueue(siteId),
+      getQueueStats(siteId),
+    ]);
 
     return NextResponse.json({
       success: true,
       entries,
       count: entries.length,
+      stats,
     });
   } catch (error) {
     console.error("API /api/queue/active error:", error);
