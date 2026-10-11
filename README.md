@@ -202,7 +202,7 @@ The entire interface is written in natural, welcoming Egyptian Arabic:
 
 ## 🧪 Testing & Validation
 
-A comprehensive test suite in [`tests/queue-workflow.test.ts`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/tests/queue-workflow.test.ts) covers 14 mission-critical scenarios:
+A comprehensive test suite in [`tests/queue-workflow.test.ts`](file:///c:/Users/msfir/OneDrive/Desktop/Github%20Project/amazon-now-delivery-queue/tests/queue-workflow.test.ts) covers 16 mission-critical scenarios:
 
 ```bash
 npm test
@@ -222,6 +222,8 @@ npm test
 11. `✓ Test 12`: Skipped and cancelled tickets handled cleanly.
 12. `✓ Test 13`: System audit trail logging verified.
 13. `✓ Test 14`: Real-time queue metrics and stats calculation.
+14. `✓ Test 15`: Staff closes session (queue join blocked).
+15. `✓ Test 16`: Staff starts new session (counter reset to #1).
 
 ---
 
@@ -265,16 +267,16 @@ npm run build
 
 ---
 
-## ☁️ Deployment (Vercel)
+## ☁️ Deployment
 
-1. Push your repository to GitHub.
-2. Import the project in [Vercel](https://vercel.com).
-3. Add the following **Environment Variables** in Vercel Project Settings:
+1. Push your repository to your Git provider.
+2. Import the project into your cloud hosting provider.
+3. Configure the following **Environment Variables**:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
-   - `NEXT_PUBLIC_SITE_URL` (your production Vercel domain, e.g. `https://amazon-now-queue.vercel.app`)
-4. Click **Deploy**. The application will be deployed instantly on Vercel's global edge network.
+   - `NEXT_PUBLIC_SITE_URL` (your production domain, e.g. `https://your-domain.com`)
+4. Trigger deployment to run on edge servers.
 
 ---
 
