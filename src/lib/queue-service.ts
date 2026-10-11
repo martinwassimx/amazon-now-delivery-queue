@@ -329,6 +329,7 @@ export async function getTicketByToken(token: string): Promise<QueueEntry | null
 
 export async function getActiveQueue(siteId: string = DEFAULT_SITE_ID): Promise<QueueEntry[]> {
   const adminClient = getSupabaseAdminClient();
+  const session = await getCurrentSession(siteId);
 
   if (adminClient && isSupabaseAdminConfigured()) {
     try {
@@ -336,6 +337,7 @@ export async function getActiveQueue(siteId: string = DEFAULT_SITE_ID): Promise<
         .from("queue_entries")
         .select("*")
         .eq("site_id", siteId)
+        .eq("session_id", session.id)
         .in("status", ["waiting", "called", "processing"])
         .order("joined_at", { ascending: true });
 
@@ -349,7 +351,7 @@ export async function getActiveQueue(siteId: string = DEFAULT_SITE_ID): Promise<
 
   const store = getMemoryStore();
   const active = store.entries.filter(
-    (e) => e.site_id === siteId && ["waiting", "called", "processing"].includes(e.status)
+    (e) => e.site_id === siteId && e.session_id === session.id && ["waiting", "called", "processing"].includes(e.status)
   ).sort((a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime());
 
   return active.map((entry) => enrichEntryMetrics(entry, active));
@@ -413,10 +415,12 @@ export async function callNextDriver(siteId: string = DEFAULT_SITE_ID, staffName
       }
 
       // Direct Supabase table fallback if RPC returned empty or failed:
+      const session = await getCurrentSession(siteId);
       const { data: waitingEntry } = await adminClient
         .from("queue_entries")
         .select("*")
         .eq("site_id", siteId)
+        .eq("session_id", session.id)
         .eq("status", "waiting")
         .order("joined_at", { ascending: true })
         .limit(1)
@@ -690,6 +694,17 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
         .update({ is_active: false })
         .eq("site_id", siteId);
 
+      // Archive any lingering active entries from previous sessions so the new session starts with a clean slate
+      await adminClient
+        .from("queue_entries")
+        .update({
+          status: "completed",
+          completed_at: now,
+          updated_at: now,
+        })
+        .eq("site_id", siteId)
+        .in("status", ["waiting", "called", "processing"]);
+
       // Insert a completely fresh session (avoids unique_site_session_date conflict
       // by using a UUID-based approach — multiple sessions per day are allowed via
       // a new row; only the latest is ever active).
@@ -725,6 +740,42 @@ export async function startNewSession(siteId: string = DEFAULT_SITE_ID, staffNam
         };
         sessionCache[siteId] = { session: res, expires: Date.now() + 2000 };
         return res;
+      } else if (createError) {
+        console.warn("Could not insert new session row, attempting update fallback on active session:", createError);
+        const { data: updatedSession, error: updateError } = await adminClient
+          .from("queue_sessions")
+          .update({
+            sequence_counter: 0,
+            is_active: true,
+          })
+          .eq("site_id", siteId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .select()
+          .maybeSingle();
+
+        if (!updateError && updatedSession) {
+          try {
+            await adminClient.from("audit_logs").insert({
+              site_id: siteId,
+              action: "manual_override",
+              action_label_ar: "بدء جلسة جديدة",
+              performed_by_name: staffName,
+              details: "تم تصفير عداد الطابور وبدء جلسة جديدة بنجاح",
+            });
+          } catch {}
+
+          const res: SessionInfo = {
+            id: updatedSession.id,
+            site_id: updatedSession.site_id,
+            session_date: updatedSession.session_date,
+            sequence_counter: 0,
+            is_active: true,
+            created_at: updatedSession.created_at,
+          };
+          sessionCache[siteId] = { session: res, expires: Date.now() + 2000 };
+          return res;
+        }
       }
     } catch (err) {
       console.error("Supabase startNewSession error:", err);

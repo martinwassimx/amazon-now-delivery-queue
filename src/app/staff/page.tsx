@@ -60,6 +60,9 @@ export default function StaffDashboardPage() {
     message: "",
   });
 
+  // Start new session (counter reset) confirmation modal
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+
   const previousCountRef = useRef<number>(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -230,6 +233,11 @@ export default function StaffDashboardPage() {
 
   const handleSessionAction = async (action: "start_new" | "open" | "close") => {
     setActionLoading(true);
+    if (action === "start_new") {
+      setIsResetModalOpen(false);
+      // Optimistically clear the active queue in the UI so the user sees an immediate reset
+      setActiveQueue([]);
+    }
     try {
       const res = await fetch("/api/queue/session", {
         method: "POST",
@@ -240,24 +248,19 @@ export default function StaffDashboardPage() {
       if (!res.ok || !data.success) {
         showNotification(data.error || "حصلت مشكلة أثناء تحديث الجلسة", "error");
       } else {
-        showNotification(data.message || "تم تحديث الجلسة بنجاح", "success");
+        showNotification(data.message || "تم تصفير العداد وبدء جلسة جديدة بنجاح", "success");
         await refreshData();
       }
     } catch (err) {
       showNotification("فشل الاتصال بالخادم", "error");
     } finally {
       setActionLoading(false);
+      setIsResetModalOpen(false);
     }
   };
 
   const triggerStartNewSession = () => {
-    if (
-      window.confirm(
-        "هل أنت متأكد من بدء جلسة عمل جديدة؟\n\n- سيتم تصفير عداد الأرقام ليبدأ الطابور من رقم 001.\n- سيتم فتح الطابور لاستقبال السائقين فوراً.\n- لن يؤثر ذلك على سجل الطلبات السابقة."
-      )
-    ) {
-      handleSessionAction("start_new");
-    }
+    setIsResetModalOpen(true);
   };
 
   // Derive strictly synchronized counts directly from activeQueue
@@ -794,6 +797,66 @@ export default function StaffDashboardPage() {
                 }`}
               >
                 تأكيد الإجراء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Starting New Session (Resetting Counter) */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="max-w-md w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-400">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white">بدء جلسة جديدة وتصفير العداد</h3>
+                <p className="text-xs text-slate-400">إعادة تعيين أرقام الطابور لتبدأ من 001</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 space-y-2.5 text-xs text-slate-300">
+              <div className="flex items-start gap-2">
+                <span className="text-amber-400 font-bold">•</span>
+                <span>سيتم تصفير العداد ليبدأ السائق القادم من <strong className="text-amber-300">رقم 001</strong>.</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-emerald-400 font-bold">•</span>
+                <span>سيتم فتح الطابور واستقبال المناديب فوراً.</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-blue-400 font-bold">•</span>
+                <span>لن يؤثر ذلك على سجل الطلبات السابقة في قسم السجل.</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              هل أنت متأكد من تصفير العداد وبدء جلسة جديدة الآن؟
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsResetModalOpen(false)}
+                disabled={actionLoading}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition cursor-pointer"
+              >
+                تراجع
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSessionAction("start_new")}
+                disabled={actionLoading}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 font-bold text-xs text-white transition flex items-center gap-2 cursor-pointer shadow-lg active:scale-95"
+              >
+                {actionLoading ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                )}
+                <span>تأكيد تصفير العداد</span>
               </button>
             </div>
           </div>
