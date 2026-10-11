@@ -274,5 +274,5 @@ npm run build
 
 ## 📄 License & Credits
 
-Built for **محطة توزيع أمازون ناو — الهرم (Amazon Now Logistics Egypt)**.  
+Developed and Maintained by **Martin** ([@martinwassimx](https://github.com/martinwassimx)).  
 All Rights Reserved © 2026.
