@@ -1,45 +1,39 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "NOT_SET";
-  const envKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "NOT_SET";
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "NOT_SET";
+  const url = "https://mwnyspuszkwrxpwsxtwb.supabase.co/rest/v1/queue_sessions?select=*";
+  const key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im13bnlzcHVzemt3cnhwd3N4dHdiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTc0NTI1MywiZXhwIjoyMTA3MzIxMjUzfQ.mGKyQQ0e1cj4x5xLTzqC-G6JvEABJanY5k-Bvh5Ep50";
 
-  const client = getSupabaseAdminClient();
+  const start = Date.now();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
 
-  let dbResult: unknown = null;
-  let dbError: unknown = null;
-  let duration = 0;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "apikey": key,
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
 
-  if (client) {
-    const start = Date.now();
-    try {
-      // Set a 4-second timeout to avoid Vercel 504
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Supabase query timed out after 4s")), 4000)
-      );
-      const queryPromise = client.from("queue_sessions").select("*").limit(1);
-
-      const res = (await Promise.race([queryPromise, timeoutPromise])) as { data: unknown; error: unknown };
-      duration = Date.now() - start;
-      dbResult = res.data;
-      dbError = res.error;
-    } catch (e) {
-      duration = Date.now() - start;
-      dbError = (e as Error).message || String(e);
-    }
+    const text = await res.text();
+    return NextResponse.json({
+      durationMs: Date.now() - start,
+      status: res.status,
+      headers: Object.fromEntries(res.headers.entries()),
+      body: text.slice(0, 500),
+    });
+  } catch (err) {
+    return NextResponse.json({
+      durationMs: Date.now() - start,
+      error: (err as Error).message || String(err),
+      name: (err as Error).name,
+    });
   }
-
-  return NextResponse.json({
-    envUrl: envUrl.slice(0, 30) + "...",
-    envKeyPrefix: envKey.slice(0, 15) + "...",
-    anonKeyPrefix: anonKey.slice(0, 15) + "...",
-    clientCreated: Boolean(client),
-    durationMs: duration,
-    dbResult,
-    dbError,
-  });
 }
